@@ -37,6 +37,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    # No CLI args → launch the GUI (this is also how the packaged .app starts)
+    if not argv:
+        from redsailcut.app import run_gui
+        return run_gui()
     args = build_parser().parse_args(argv)
 
     if not args.dry_run:
