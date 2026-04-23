@@ -36,6 +36,22 @@ def test_simple_square_fixture_has_four_sides_and_closes(tmp_path):
     assert perimeter == pytest.approx(200.0, abs=0.5)
 
 
+def test_simple_square_produces_exactly_five_points_no_oversampling():
+    """A square has zero curvature — the parser must NOT uniformly sample
+    along its perimeter. Expected output: the move endpoint (0,0), then one
+    point per corner, then the closing point back to (0,0) — exactly 5 points.
+    """
+    polylines, _, _ = svg_to_polylines(FIXTURES / "simple_square.svg",
+                                       target_width_mm=50.0)
+    assert len(polylines) == 1
+    points = polylines[0]
+    assert len(points) == 5, f"expected 5 points, got {len(points)}: {points}"
+    expected = [(0.0, 0.0), (50.0, 0.0), (50.0, 50.0), (0.0, 50.0), (0.0, 0.0)]
+    for actual, exp in zip(points, expected):
+        assert actual[0] == pytest.approx(exp[0], abs=0.01)
+        assert actual[1] == pytest.approx(exp[1], abs=0.01)
+
+
 def test_bbox_of_square_matches_target_width(tmp_path):
     polylines, w_mm, _ = svg_to_polylines(FIXTURES / "simple_square.svg",
                                           target_width_mm=80.0)

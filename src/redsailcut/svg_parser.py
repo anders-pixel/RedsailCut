@@ -2,21 +2,36 @@
 
 We rely on svgelements with `reify=True` so all transforms (including nested
 `<g transform>` chains and flipped scales) are baked into path coordinates
-before we sample. Curves are flattened by uniform parametric sampling.
+before we sample. Curves are flattened by *per-segment* adaptive sampling;
+straight segments (`Line`/`Close`) emit only their endpoint, so a square
+produces exactly the five points you'd expect, not 200 uniform samples along
+an already-straight perimeter.
 """
 
 from __future__ import annotations
 
 from pathlib import Path as FsPath
 
-from svgelements import SVG, Path, Shape
+from svgelements import (
+    SVG,
+    Arc,
+    Close,
+    CubicBezier,
+    Line,
+    Move,
+    Path,
+    QuadraticBezier,
+    Shape,
+)
 
 Polyline = list[tuple[float, float]]
 
 MIN_SUBPATH_LENGTH_MM = 0.1
-MAX_INTERPOLATION_STEPS = 200
-MIN_INTERPOLATION_STEPS = 4
+MAX_CURVE_STEPS = 200
+MIN_CURVE_STEPS = 4
 PPI = 96.0
+
+_CURVE_TYPES = (CubicBezier, QuadraticBezier, Arc)
 
 
 def svg_to_polylines(
@@ -48,21 +63,37 @@ def svg_to_polylines(
         path = Path(element)
         for subpath in path.as_subpaths():
             sub = Path(subpath)
-            length_user = sub.length(error=1e-3)
-            length_mm = length_user * scale
-            if length_mm < MIN_SUBPATH_LENGTH_MM:
+            if sub.length(error=1e-3) * scale < MIN_SUBPATH_LENGTH_MM:
                 continue
-            steps = max(
-                MIN_INTERPOLATION_STEPS,
-                min(MAX_INTERPOLATION_STEPS, int(length_mm * 2)),
-            )
-            polyline: Polyline = []
-            for i in range(steps + 1):
-                pt = sub.point(i / steps)
-                polyline.append((pt.x * scale, pt.y * scale))
-            polylines.append(polyline)
+            polyline = _subpath_to_polyline(sub, scale)
+            if len(polyline) >= 2:
+                polylines.append(polyline)
 
     return polylines, target_width_mm, height_mm
+
+
+def _subpath_to_polyline(sub: Path, scale: float) -> Polyline:
+    polyline: Polyline = []
+    for seg in sub:
+        if isinstance(seg, Move):
+            if seg.end is not None:
+                polyline.append((seg.end.x * scale, seg.end.y * scale))
+        elif isinstance(seg, _CURVE_TYPES):
+            seg_len_mm = seg.length(error=1e-3) * scale
+            steps = max(MIN_CURVE_STEPS, min(MAX_CURVE_STEPS, int(seg_len_mm * 2)))
+            # Skip i=0 — that's the endpoint of the previous segment, already appended.
+            for i in range(1, steps + 1):
+                pt = seg.point(i / steps)
+                polyline.append((pt.x * scale, pt.y * scale))
+        elif isinstance(seg, (Line, Close)):
+            if seg.end is not None:
+                polyline.append((seg.end.x * scale, seg.end.y * scale))
+        else:
+            # Unknown segment type — fall back to endpoint only.
+            end = getattr(seg, "end", None)
+            if end is not None:
+                polyline.append((end.x * scale, end.y * scale))
+    return polyline
 
 
 def polyline_bbox(polylines: list[Polyline]) -> tuple[float, float, float, float]:
