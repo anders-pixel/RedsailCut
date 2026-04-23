@@ -83,3 +83,18 @@ def total_cut_length_mm(polylines: list[Polyline]) -> float:
             dy = y1 - y0
             total += (dx * dx + dy * dy) ** 0.5
     return total
+
+
+def total_travel_length_mm(polylines: list[Polyline]) -> float:
+    """Sum of pen-up travel between consecutive polylines, in mm."""
+    total = 0.0
+    prev_end: tuple[float, float] | None = (0.0, 0.0)  # start at origin
+    for poly in polylines:
+        if not poly:
+            continue
+        if prev_end is not None:
+            x0, y0 = prev_end
+            x1, y1 = poly[0]
+            total += ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
+        prev_end = poly[-1]
+    return total

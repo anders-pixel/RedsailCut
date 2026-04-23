@@ -49,7 +49,12 @@ from redsailcut.svg_parser import (
     Polyline,
     svg_to_polylines,
     total_cut_length_mm,
+    total_travel_length_mm,
 )
+
+WARN_WIDTH_MM = 400.0
+WARN_TIME_MINUTES = 60.0
+PEN_UP_SPEED_FACTOR = 2.0  # travel is roughly twice cut speed on most cutters
 
 BAUD_CHOICES = [9600, 19200, 38400]
 
@@ -238,6 +243,15 @@ class MainWindow(QMainWindow):
         self._lbl_est = QLabel("Est. time: —")
         c_layout.addWidget(self._lbl_est)
 
+        self._lbl_warn = QLabel("")
+        self._lbl_warn.setWordWrap(True)
+        self._lbl_warn.setStyleSheet(
+            "color: #8a6d00; background: #fff8dd; border: 1px solid #e6d58a; "
+            "padding: 4px; border-radius: 4px;"
+        )
+        self._lbl_warn.setVisible(False)
+        c_layout.addWidget(self._lbl_warn)
+
         # CUT / Stop
         self._btn_cut = QPushButton("CUT")
         self._btn_cut.setMinimumHeight(44)
@@ -410,18 +424,44 @@ class MainWindow(QMainWindow):
     def _refresh_estimate(self) -> None:
         if self._svg_path is None:
             self._lbl_est.setText("Est. time: —")
+            self._lbl_warn.setVisible(False)
             return
+        width_mm = self._spin_width.value()
         try:
-            polylines, _, _ = svg_to_polylines(
-                self._svg_path, target_width_mm=self._spin_width.value())
+            polylines, _, _ = svg_to_polylines(self._svg_path, target_width_mm=width_mm)
         except Exception:
             self._lbl_est.setText("Est. time: —")
+            self._lbl_warn.setVisible(False)
             return
-        length_mm = total_cut_length_mm(polylines)
+        cut_mm = total_cut_length_mm(polylines)
+        travel_mm = total_travel_length_mm(polylines)
         speed = max(1, self._spin_speed.value())
-        secs = length_mm / (speed * 10.0)
-        mins, ssec = divmod(int(secs), 60)
-        self._lbl_est.setText(f"Est. time: {mins}m {ssec}s  ({length_mm:.0f} mm)")
+        cut_secs = cut_mm / (speed * 10.0)
+        travel_secs = travel_mm / (speed * 10.0 * PEN_UP_SPEED_FACTOR)
+        total_secs = cut_secs + travel_secs
+        mins, ssec = divmod(int(total_secs), 60)
+        self._lbl_est.setText(
+            f"Est. time: {mins}m {ssec}s  (cut {cut_mm:.0f} mm + travel {travel_mm:.0f} mm)"
+        )
+        self._update_warning_banner(width_mm, total_secs)
+
+    def _update_warning_banner(self, width_mm: float, total_secs: float) -> None:
+        warnings: list[str] = []
+        if width_mm > WARN_WIDTH_MM:
+            warnings.append(
+                f"Design er bredere end {WARN_WIDTH_MM:.0f} mm — nogle Redsail-modeller "
+                "har 16383-unit grænse; tjek at din maskine kan håndtere det."
+            )
+        if total_secs > WARN_TIME_MINUTES * 60:
+            mins = int(total_secs / 60)
+            warnings.append(
+                f"Estimeret skæretid er {mins} min — overvej at dele designet op."
+            )
+        if warnings:
+            self._lbl_warn.setText("⚠  " + "  ".join(warnings))
+            self._lbl_warn.setVisible(True)
+        else:
+            self._lbl_warn.setVisible(False)
 
     # --- CUT button state --------------------------------------------------
     def _update_cut_button_state(self) -> None:
