@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "redsailcut"
+version = "0.1.0"
+description = "Minimal SVG cutting app for Redsail vinyl plotters"
+requires-python = ">=3.11"
+authors = [{ name = "Anders Lorentzen", email = "anders@loow.com" }]
+dependencies = [
+    "PyQt6>=6.6",
+    "pyserial>=3.5",
+    "svgelements>=1.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-qt>=4.4",
+    "briefcase>=0.3.17",
+]
+
+[project.scripts]
+redsailcut = "redsailcut.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.briefcase]
+project_name = "RedsailCut"
+bundle = "dk.loow"
+version = "0.1.0"
+url = "https://github.com/loow/redsailcut"
+license.file = "LICENSE"
+author = "Anders Lorentzen"
+author_email = "anders@loow.com"
+
+[tool.briefcase.app.redsailcut]
+formal_name = "RedsailCut"
+description = "Minimal SVG cutting app for Redsail vinyl plotters"
+long_description = "Loads an SVG, previews it, scales it in mm, and drives a Redsail vinyl cutter over USB-serial using HPGL."
+sources = ["src/redsailcut"]
+requires = [
+    "PyQt6>=6.6",
+    "pyserial>=3.5",
+    "svgelements>=1.9",
+]
+
+[tool.briefcase.app.redsailcut.macOS]
+universal_build = true
+requires = [
+    "std-nslog~=1.0.0",
+]
