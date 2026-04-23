@@ -89,3 +89,35 @@ def send_hpgl(
         ser.flush()
         on_progress(i + 1, total)
     return True
+
+
+def probe_cutter(
+    port: str,
+    baud: int,
+    flow: FlowControl = FlowControl.RTS_CTS,
+    queries: tuple[str, ...] = ("OI;", "OS;", "OE;", "OA;"),
+    read_timeout_s: float = 2.0,
+) -> str:
+    """Connection diagnostic: send HPGL identification queries and return
+    whatever the cutter replies. If the cutter is wired, powered, and in
+    HPGL mode, `OI;` yields a model string; no reply means bytes aren't
+    making it there (or the cutter doesn't understand HP-GL/2 queries)."""
+    import time
+    ser = open_cutter(port, baud, flow=flow)
+    try:
+        ser.timeout = read_timeout_s
+        ser.reset_input_buffer()
+        lines: list[str] = []
+        for q in queries:
+            ser.write(q.encode("ascii") + b"\n")
+            ser.flush()
+            time.sleep(0.2)  # give cutter time to respond
+            chunk = ser.read(256)
+            text = chunk.decode("ascii", errors="replace").strip() if chunk else ""
+            lines.append(f"  {q:<5} -> {text!r}" if text else f"  {q:<5} -> (no reply)")
+        return "\n".join(lines)
+    finally:
+        try:
+            ser.close()
+        except Exception:
+            pass

@@ -42,6 +42,7 @@ from redsailcut.serial_io import (
     FlowControl,
     SerialError,
     open_cutter,
+    probe_cutter,
     send_hpgl,
 )
 from redsailcut.settings import AppSettings
@@ -136,6 +137,11 @@ class MainWindow(QMainWindow):
         file_menu.addAction(act_quit)
 
         settings_menu = mb.addMenu("&Settings")
+        tools_menu = settings_menu.addMenu("&Tools")
+        act_probe = QAction("Test cutter connection…", self)
+        act_probe.triggered.connect(self._probe_connection)
+        tools_menu.addAction(act_probe)
+
         adv = settings_menu.addMenu("&Advanced")
         flow_menu = adv.addMenu("Serial flow control")
         self._flow_group = QActionGroup(self)
@@ -318,6 +324,31 @@ class MainWindow(QMainWindow):
             mode = action.data()
             self._settings.flow_control = mode
             self._log(f"Serial flow control: {mode.value}")
+
+    # --- Diagnostic probe --------------------------------------------------
+    def _probe_connection(self) -> None:
+        port = self._cmb_port.currentData()
+        if not port:
+            QMessageBox.information(self, "Test connection", "Vælg en port først.")
+            return
+        baud = int(self._cmb_baud.currentData() or 9600)
+        flow = self._settings.flow_control
+        self._log(f"Probe: {port} @ {baud} baud, flow={flow.value}")
+        try:
+            report = probe_cutter(port, baud, flow=flow)
+        except SerialError as e:
+            QMessageBox.critical(self, "Probe error", str(e))
+            self._log(f"Probe-fejl: {e}")
+            return
+        self._log("Probe-svar:\n" + report)
+        QMessageBox.information(
+            self, "Probe result",
+            f"Sendt til {port}:\n{report}\n\n"
+            "Hvis alle viser '(no reply)' modtager cutteren enten ikke bytes "
+            "(kabel/flow-control) eller understøtter ikke HP-GL/2-forespørgsler.\n"
+            "Hvis mindst én har et svar → kommunikation virker; problemet er "
+            "så command-fortolkning eller maskinens mode.",
+        )
 
     # --- Ports -------------------------------------------------------------
     def _load_ports(self) -> None:
