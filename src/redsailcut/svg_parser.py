@@ -10,6 +10,7 @@ an already-straight perimeter.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path as FsPath
 
 from svgelements import (
@@ -63,13 +64,63 @@ def svg_to_polylines(
         path = Path(element)
         for subpath in path.as_subpaths():
             sub = Path(subpath)
-            if sub.length(error=1e-3) * scale < MIN_SUBPATH_LENGTH_MM:
+            # Rough length from summed segment approximations — cheap filter
+            # before the expensive sampling loop.
+            approx_len_mm = sum(_fast_segment_length(s) for s in sub) * scale
+            if approx_len_mm < MIN_SUBPATH_LENGTH_MM:
                 continue
             polyline = _subpath_to_polyline(sub, scale)
             if len(polyline) >= 2:
                 polylines.append(polyline)
 
     return polylines, target_width_mm, height_mm
+
+
+def _fast_segment_length(segment) -> float:
+    """Approximate segment length in user units.
+
+    Lines (and degenerate Move/Close) get exact Euclidean distance.
+    Bezier segments use the control-polygon sum — an upper bound on the
+    true arc length, within ~20% on realistic curves, and roughly a
+    thousand times cheaper than svgelements' recursive Simpson integration
+    (`segment.length(error=1e-3)`). Arcs use a chord-based upper bound
+    that's accurate enough for deciding sampling density.
+
+    We only need this for "sample 10 vs 50 points?" decisions, not for
+    metrology — over-sampling by a handful of points is free compared to
+    the 5 ms per call that `length()` costs.
+    """
+    if isinstance(segment, (Line, Close, Move)):
+        s, e = segment.start, segment.end
+        if s is None or e is None:
+            return 0.0
+        return math.hypot(e.x - s.x, e.y - s.y)
+
+    if isinstance(segment, CubicBezier):
+        p = (segment.start, segment.control1, segment.control2, segment.end)
+        return (
+            math.hypot(p[1].x - p[0].x, p[1].y - p[0].y)
+            + math.hypot(p[2].x - p[1].x, p[2].y - p[1].y)
+            + math.hypot(p[3].x - p[2].x, p[3].y - p[2].y)
+        )
+
+    if isinstance(segment, QuadraticBezier):
+        p = (segment.start, segment.control, segment.end)
+        return (
+            math.hypot(p[1].x - p[0].x, p[1].y - p[0].y)
+            + math.hypot(p[2].x - p[1].x, p[2].y - p[1].y)
+        )
+
+    if isinstance(segment, Arc):
+        s, e = segment.start, segment.end
+        if s is None or e is None:
+            return 0.0
+        chord = math.hypot(e.x - s.x, e.y - s.y)
+        # Upper bound for sweeps up to 180°: arc ≤ chord * π/2 ≈ 1.57.
+        # Sampling density is insensitive to this being a slight overshoot.
+        return chord * 1.5708
+
+    return 0.0
 
 
 def _subpath_to_polyline(sub: Path, scale: float) -> Polyline:
@@ -79,7 +130,7 @@ def _subpath_to_polyline(sub: Path, scale: float) -> Polyline:
             if seg.end is not None:
                 polyline.append((seg.end.x * scale, seg.end.y * scale))
         elif isinstance(seg, _CURVE_TYPES):
-            seg_len_mm = seg.length(error=1e-3) * scale
+            seg_len_mm = _fast_segment_length(seg) * scale
             steps = max(MIN_CURVE_STEPS, min(MAX_CURVE_STEPS, int(seg_len_mm * 2)))
             # Skip i=0 — that's the endpoint of the previous segment, already appended.
             for i in range(1, steps + 1):

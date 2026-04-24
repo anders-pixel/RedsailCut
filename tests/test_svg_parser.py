@@ -2,8 +2,10 @@ import math
 from pathlib import Path
 
 import pytest
+from svgelements import Arc, CubicBezier, Line, Point, QuadraticBezier
 
 from redsailcut.svg_parser import (
+    _fast_segment_length,
     polyline_bbox,
     svg_to_polylines,
     total_cut_length_mm,
@@ -143,3 +145,84 @@ def test_invalid_target_width_raises():
         svg_to_polylines(FIXTURES / "simple_square.svg", target_width_mm=0.0)
     with pytest.raises(ValueError):
         svg_to_polylines(FIXTURES / "simple_square.svg", target_width_mm=-10.0)
+
+
+# --- _fast_segment_length unit tests ---------------------------------------
+
+def test_fast_length_exact_for_line():
+    line = Line(start=Point(0, 0), end=Point(10, 0))
+    assert _fast_segment_length(line) == pytest.approx(10.0)
+
+
+def test_fast_length_exact_for_diagonal_line():
+    line = Line(start=Point(0, 0), end=Point(3, 4))
+    assert _fast_segment_length(line) == pytest.approx(5.0)
+
+
+def test_fast_length_nearly_straight_cubic_within_5pct_of_exact():
+    # Nearly-straight cubic: control points slightly off the line
+    cb = CubicBezier(
+        start=Point(0, 0),
+        control1=Point(3.0, 0.1),
+        control2=Point(7.0, 0.1),
+        end=Point(10.0, 0.0),
+    )
+    exact = cb.length(error=1e-4)
+    approx = _fast_segment_length(cb)
+    # Control-polygon is an upper bound; for a nearly-straight curve
+    # it should overshoot by well under 5%.
+    assert approx >= exact
+    assert approx == pytest.approx(exact, rel=0.05)
+
+
+def test_fast_length_cubic_with_pronounced_bend_is_upper_bound():
+    # S-curve: control points yank the curve well off the straight line
+    cb = CubicBezier(
+        start=Point(0, 0),
+        control1=Point(0, 10),
+        control2=Point(10, -10),
+        end=Point(10, 0),
+    )
+    exact = cb.length(error=1e-4)
+    approx = _fast_segment_length(cb)
+    # Control polygon = 10 + sqrt(10²+20²) + 10 = 10 + 22.36 + 10 = 42.36
+    # Real arc length of this S ≈ 21 (much shorter because the curve
+    # doesn't actually go through the control points). Approx must
+    # strictly upper-bound the arc length.
+    assert approx > exact
+    assert approx == pytest.approx(42.36, abs=0.1)
+
+
+def test_fast_length_quadratic_bezier_sum_of_two_control_legs():
+    qb = QuadraticBezier(
+        start=Point(0, 0), control=Point(5, 10), end=Point(10, 0),
+    )
+    # Expected: sqrt(25+100) + sqrt(25+100) = 2*sqrt(125) ≈ 22.36
+    assert _fast_segment_length(qb) == pytest.approx(2 * math.sqrt(125))
+
+
+def test_fast_length_arc_uses_chord_times_half_pi():
+    # Arc with chord of 10 units — approx returns ~15.708 (upper bound).
+    arc = Arc(
+        start=Point(0, 0),
+        end=Point(10, 0),
+        rx=5, ry=5, rotation=0, arc=0, sweep=1,
+    )
+    assert _fast_segment_length(arc) == pytest.approx(10 * math.pi / 2, rel=1e-3)
+
+
+def test_fast_length_degenerate_line_is_zero():
+    line = Line(start=Point(5, 5), end=Point(5, 5))
+    assert _fast_segment_length(line) == 0.0
+
+
+def test_barcelona_parse_under_1_second():
+    """Regression test: control-polygon approx should keep this under 1 s."""
+    import time
+    t0 = time.time()
+    polylines, _, _ = svg_to_polylines(FIXTURES / "barcelona.svg",
+                                       target_width_mm=400.0)
+    elapsed = time.time() - t0
+    assert elapsed < 1.0, f"parse took {elapsed:.2f}s (expected <1s)"
+    # Geometry should remain functionally unchanged.
+    assert len(polylines) == 401
