@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import enum
 import threading
+import time
 from collections.abc import Callable
 from typing import Protocol
 
@@ -43,7 +44,7 @@ def open_cutter(
     flow: FlowControl = FlowControl.NONE,
 ) -> serial.Serial:
     try:
-        return serial.Serial(
+        ser = serial.Serial(
             port=port,
             baudrate=baud,
             bytesize=serial.EIGHTBITS,
@@ -55,10 +56,18 @@ def open_cutter(
             xonxoff=(flow is FlowControl.XON_XOFF),
             dsrdtr=False,
         )
-        # FlowControl.NONE implies both rtscts and xonxoff False — many cheap
-        # cutters (Redsail RS720C among them) don't wire RTS/CTS and don't send
-        # XON/XOFF, so any handshake silently blocks or false-OKs. The bits above
-        # already handle it; no further action needed.
+        # Assert DTR and RTS high explicitly. On FT232R the post-open state of
+        # these lines isn't guaranteed; some cutters (Redsail RS720C included)
+        # apparently refuse to process incoming bytes until they see the host
+        # driving them high. Without this step, bytes stream out over the wire
+        # but the cutter head never moves — identical symptom to wiring failure.
+        # The 300 ms settle matches what worked in the terminal smoke test.
+        if flow is not FlowControl.RTS_CTS:
+            ser.rts = True
+        ser.dtr = True
+        time.sleep(0.3)
+        ser.reset_input_buffer()
+        return ser
     except PermissionError as e:
         raise SerialError(
             f"macOS blokerer adgangen til porten ({port}). "
