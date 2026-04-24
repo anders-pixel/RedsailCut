@@ -82,3 +82,28 @@ class AppSettings:
     @lock_ratio.setter
     def lock_ratio(self, v: bool) -> None:
         self._s.setValue("lock_ratio", bool(v))
+
+    # Blade compensation (pen-mode defaults — users opt in)
+    @property
+    def blade_offset_mm(self) -> float:
+        return float(self._s.value("blade_offset_mm", 0.0, type=float))
+
+    @blade_offset_mm.setter
+    def blade_offset_mm(self, v: float) -> None:
+        self._s.setValue("blade_offset_mm", float(v))
+
+    @property
+    def overcut_mm(self) -> float:
+        return float(self._s.value("overcut_mm", 0.5, type=float))
+
+    @overcut_mm.setter
+    def overcut_mm(self, v: float) -> None:
+        self._s.setValue("overcut_mm", float(v))
+
+    @property
+    def corner_threshold_deg(self) -> int:
+        return int(self._s.value("corner_threshold_deg", 5, type=int))
+
+    @corner_threshold_deg.setter
+    def corner_threshold_deg(self, v: int) -> None:
+        self._s.setValue("corner_threshold_deg", int(v))

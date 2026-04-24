@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from redsailcut.blade_offset import compensate_polylines
 from redsailcut.hpgl import polylines_to_hpgl
 from redsailcut.preview import PreviewWidget
 from redsailcut.serial_io import (
@@ -242,6 +243,37 @@ class MainWindow(QMainWindow):
         pf.addRow("Force:", self._spin_force)
         c_layout.addWidget(params_box)
 
+        # Blade compensation group (drag-knife offset)
+        blade_box = QGroupBox("Blade compensation")
+        bf = QFormLayout(blade_box)
+        self._spin_offset = QDoubleSpinBox()
+        self._spin_offset.setRange(0.0, 1.0)
+        self._spin_offset.setSingleStep(0.05)
+        self._spin_offset.setDecimals(2)
+        self._spin_offset.setSuffix(" mm")
+        self._spin_offset.setToolTip("0 = pen-mode (no compensation). "
+                                     "Typical drag-knife offset: 0.20–0.30 mm.")
+        self._spin_offset.valueChanged.connect(self._on_offset_changed)
+        self._spin_overcut = QDoubleSpinBox()
+        self._spin_overcut.setRange(0.0, 2.0)
+        self._spin_overcut.setSingleStep(0.1)
+        self._spin_overcut.setDecimals(1)
+        self._spin_overcut.setSuffix(" mm")
+        self._spin_overcut.setToolTip("Extends closed paths past the closing "
+                                      "point so vinyl separates cleanly.")
+        self._spin_overcut.valueChanged.connect(self._on_overcut_changed)
+        self._spin_corner = QSpinBox()
+        self._spin_corner.setRange(1, 45)
+        self._spin_corner.setSingleStep(1)
+        self._spin_corner.setSuffix(" °")
+        self._spin_corner.setToolTip("Below this turn angle, compensation is "
+                                     "skipped — keeps sampled curves from drifting.")
+        self._spin_corner.valueChanged.connect(self._on_corner_threshold_changed)
+        bf.addRow("Offset:", self._spin_offset)
+        bf.addRow("Overcut:", self._spin_overcut)
+        bf.addRow("Corner threshold:", self._spin_corner)
+        c_layout.addWidget(blade_box)
+
         # Dry run + est time
         self._chk_dry = QCheckBox("Dry run  —  save .plt to Desktop")
         self._chk_dry.toggled.connect(self._on_dry_run_changed)
@@ -289,6 +321,10 @@ class MainWindow(QMainWindow):
         self._spin_force.setValue(self._settings.force)
         self._chk_dry.setChecked(self._settings.dry_run)
         self._chk_lock.setChecked(self._settings.lock_ratio)
+        self._spin_offset.setValue(self._settings.blade_offset_mm)
+        self._spin_overcut.setValue(self._settings.overcut_mm)
+        self._spin_corner.setValue(self._settings.corner_threshold_deg)
+        self._update_overcut_enabled()
         baud = self._settings.baud
         idx = self._cmb_baud.findData(baud)
         if idx >= 0:
@@ -299,12 +335,29 @@ class MainWindow(QMainWindow):
                 action.setChecked(True)
                 break
 
+    def _update_overcut_enabled(self) -> None:
+        # Overcut only meaningful when offset > 0
+        self._spin_overcut.setEnabled(self._spin_offset.value() > 0)
+
     def _on_speed_changed(self, v: int) -> None:
         self._settings.speed = v
         self._refresh_estimate()
 
     def _on_force_changed(self, v: int) -> None:
         self._settings.force = v
+
+    def _on_offset_changed(self, v: float) -> None:
+        self._settings.blade_offset_mm = v
+        self._update_overcut_enabled()
+        self._refresh_estimate()
+
+    def _on_overcut_changed(self, v: float) -> None:
+        self._settings.overcut_mm = v
+        self._refresh_estimate()
+
+    def _on_corner_threshold_changed(self, v: int) -> None:
+        self._settings.corner_threshold_deg = v
+        self._refresh_estimate()
 
     def _on_baud_changed(self, idx: int) -> None:
         data = self._cmb_baud.itemData(idx)
@@ -465,6 +518,14 @@ class MainWindow(QMainWindow):
             self._lbl_est.setText("Est. time: —")
             self._lbl_warn.setVisible(False)
             return
+        # Apply blade compensation before length calculation so the estimate
+        # reflects what's actually going to be sent.
+        polylines = compensate_polylines(
+            polylines,
+            offset_mm=self._spin_offset.value(),
+            overcut_mm=self._spin_overcut.value(),
+            corner_threshold_deg=self._spin_corner.value(),
+        )
         cut_mm = total_cut_length_mm(polylines)
         travel_mm = total_travel_length_mm(polylines)
         speed = max(1, self._spin_speed.value())
@@ -519,12 +580,24 @@ class MainWindow(QMainWindow):
         try:
             polylines, w_mm, h_mm = svg_to_polylines(
                 self._svg_path, target_width_mm=width_mm)
+            polylines = compensate_polylines(
+                polylines,
+                offset_mm=self._spin_offset.value(),
+                overcut_mm=self._spin_overcut.value(),
+                corner_threshold_deg=self._spin_corner.value(),
+            )
             hpgl = polylines_to_hpgl(polylines, height_mm=h_mm,
                                      speed_cm_s=speed, force_g=force)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Fejl", f"Kunne ikke generere HPGL:\n{e}")
             self._log(f"HPGL-fejl: {e}")
             return
+        if self._spin_offset.value() > 0:
+            self._log(
+                f"Blade compensation: offset={self._spin_offset.value():.2f}mm, "
+                f"overcut={self._spin_overcut.value():.1f}mm, "
+                f"corner={self._spin_corner.value()}°"
+            )
 
         if self._chk_dry.isChecked():
             self._write_dry_run(hpgl)
