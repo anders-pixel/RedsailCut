@@ -12,6 +12,7 @@ dependencies = [
     "PyQt6>=6.6",
     "pyserial>=3.5",
     "svgelements>=1.9",
+    "numpy>=1.24",
 ]
 
 [project.optional-dependencies]
@@ -49,6 +50,7 @@ requires = [
     "PyQt6>=6.6",
     "pyserial>=3.5",
     "svgelements>=1.9",
+    "numpy>=1.24",
 ]
 
 [tool.briefcase.app.redsailcut.macOS]
