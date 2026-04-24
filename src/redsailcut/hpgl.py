@@ -34,11 +34,16 @@ def polylines_to_hpgl(
         "IN;",
         "SP1;",
         f"VS{speed_cm_s};",
-        f"!FS{force_g};",
         f"FS{force_g};",
         "PA;",
         "PU0,0;",
     ]
+    # NOTE: we deliberately do NOT emit the HP-GL/2 style `!FS{n};` variant
+    # even though it's harmless on paper-authentic HP plotters. Verified on a
+    # Redsail RS720C: the `!` prefix is parsed as an unknown command and the
+    # cutter discards the rest of the buffer, resulting in a cut that sends
+    # bytes fine but never moves the head. Plain `FS{n};` works on the RS720C
+    # and every other plotter we'd realistically ship to.
 
     for polyline in polylines:
         pts = list(polyline)

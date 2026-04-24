@@ -13,7 +13,6 @@ def test_empty_polylines_emits_header_and_footer_only():
         "IN;",
         "SP1;",
         "VS20;",
-        "!FS80;",
         "FS80;",
         "PA;",
         "PU0,0;",
@@ -24,16 +23,23 @@ def test_empty_polylines_emits_header_and_footer_only():
 
 def test_header_command_order_and_parameters():
     out = split(polylines_to_hpgl([], height_mm=100.0, speed_cm_s=15, force_g=120))
-    header = out[:7]
+    header = out[:6]
     assert header == [
         "IN;",
         "SP1;",
         "VS15;",
-        "!FS120;",
         "FS120;",
         "PA;",
         "PU0,0;",
     ]
+
+
+def test_header_does_not_emit_hpgl2_bang_prefix():
+    # HP-GL/2 `!FS{n};` crashes the Redsail RS720C parser. Verified on
+    # hardware. Plain `FS{n};` must be the only force command in output.
+    out = polylines_to_hpgl([], height_mm=100.0, force_g=80)
+    assert "!FS" not in out
+    assert "FS80;" in out
 
 
 def test_every_line_ends_with_semicolon():
