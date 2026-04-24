@@ -115,16 +115,26 @@ def test_generic_serial_exception_produces_non_permission_message():
     assert "/dev/cu.fake" in str(exc.value)
 
 
-def test_open_cutter_uses_rtscts_by_default():
+def test_open_cutter_defaults_to_no_flow_control():
+    # Redsail RS720C (and similar cheap cutters) don't wire handshake lines,
+    # so defaulting to any handshake silently blocks or false-OKs.
     with patch("redsailcut.serial_io.serial.Serial") as mock:
         open_cutter("/dev/cu.fake", 19200)
     kwargs = mock.call_args.kwargs
-    assert kwargs["rtscts"] is True
+    assert kwargs["rtscts"] is False
     assert kwargs["xonxoff"] is False
     assert kwargs["baudrate"] == 19200
 
 
-def test_open_cutter_xonxoff_flow_control_mode():
+def test_open_cutter_rtscts_opt_in():
+    with patch("redsailcut.serial_io.serial.Serial") as mock:
+        open_cutter("/dev/cu.fake", 9600, flow=FlowControl.RTS_CTS)
+    kwargs = mock.call_args.kwargs
+    assert kwargs["rtscts"] is True
+    assert kwargs["xonxoff"] is False
+
+
+def test_open_cutter_xonxoff_opt_in():
     with patch("redsailcut.serial_io.serial.Serial") as mock:
         open_cutter("/dev/cu.fake", 9600, flow=FlowControl.XON_XOFF)
     kwargs = mock.call_args.kwargs

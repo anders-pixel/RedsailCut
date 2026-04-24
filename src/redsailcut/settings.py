@@ -37,11 +37,11 @@ class AppSettings:
 
     @property
     def flow_control(self) -> FlowControl:
-        raw = self._s.value("flow_control", FlowControl.RTS_CTS.value, type=str)
+        raw = self._s.value("flow_control", FlowControl.NONE.value, type=str)
         try:
             return FlowControl(raw)
         except ValueError:
-            return FlowControl.RTS_CTS
+            return FlowControl.NONE
 
     @flow_control.setter
     def flow_control(self, v: FlowControl) -> None:

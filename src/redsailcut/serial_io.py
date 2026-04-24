@@ -22,6 +22,7 @@ ABORT_SEQUENCE = "PU;PU0,0;SP0;\n"
 
 
 class FlowControl(enum.Enum):
+    NONE = "none"
     RTS_CTS = "rtscts"
     XON_XOFF = "xonxoff"
 
@@ -39,7 +40,7 @@ class SerialPortLike(Protocol):
 def open_cutter(
     port: str,
     baud: int = 9600,
-    flow: FlowControl = FlowControl.RTS_CTS,
+    flow: FlowControl = FlowControl.NONE,
 ) -> serial.Serial:
     try:
         return serial.Serial(
@@ -54,6 +55,10 @@ def open_cutter(
             xonxoff=(flow is FlowControl.XON_XOFF),
             dsrdtr=False,
         )
+        # FlowControl.NONE implies both rtscts and xonxoff False — many cheap
+        # cutters (Redsail RS720C among them) don't wire RTS/CTS and don't send
+        # XON/XOFF, so any handshake silently blocks or false-OKs. The bits above
+        # already handle it; no further action needed.
     except PermissionError as e:
         raise SerialError(
             f"macOS blokerer adgangen til porten ({port}). "
@@ -94,7 +99,7 @@ def send_hpgl(
 def probe_cutter(
     port: str,
     baud: int,
-    flow: FlowControl = FlowControl.RTS_CTS,
+    flow: FlowControl = FlowControl.NONE,
     queries: tuple[str, ...] = ("OI;", "OS;", "OE;", "OA;"),
     read_timeout_s: float = 2.0,
 ) -> str:

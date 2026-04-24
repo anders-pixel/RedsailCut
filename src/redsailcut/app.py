@@ -147,8 +147,9 @@ class MainWindow(QMainWindow):
         self._flow_group = QActionGroup(self)
         self._flow_group.setExclusive(True)
         for mode, label in [
-            (FlowControl.RTS_CTS, "RTS/CTS (default)"),
-            (FlowControl.XON_XOFF, "XON/XOFF (fallback)"),
+            (FlowControl.NONE, "None (default — works with Redsail RS720C)"),
+            (FlowControl.RTS_CTS, "RTS/CTS"),
+            (FlowControl.XON_XOFF, "XON/XOFF"),
         ]:
             a = QAction(label, self, checkable=True)
             a.setData(mode)
