@@ -36,7 +36,9 @@ def test_send_hpgl_writes_every_line_in_order_followed_by_flush():
     aborted = threading.Event()
     progress: list[tuple[int, int]] = []
 
-    result = send_hpgl(port, hpgl, lambda d, t: progress.append((d, t)), aborted)
+    # Zero delay to keep unit tests fast; pacing semantics are covered below.
+    result = send_hpgl(port, hpgl, lambda d, t: progress.append((d, t)),
+                      aborted, inter_line_delay_s=0.0)
 
     assert result is True
     writes = [e for e in port.events if e[0] == "write"]
@@ -62,7 +64,7 @@ def test_abort_flag_mid_stream_triggers_emergency_sequence_and_stops():
         if done == 3:  # after VS20; is written, request abort
             aborted.set()
 
-    result = send_hpgl(port, hpgl, on_progress, aborted)
+    result = send_hpgl(port, hpgl, on_progress, aborted, inter_line_delay_s=0.0)
 
     assert result is False  # aborted
     writes = [e[1] for e in port.events if e[0] == "write"]
@@ -80,9 +82,21 @@ def test_abort_flag_mid_stream_triggers_emergency_sequence_and_stops():
 def test_abort_on_empty_hpgl_completes_without_sending():
     port = FakePort()
     aborted = threading.Event()
-    result = send_hpgl(port, "", lambda d, t: None, aborted)
+    result = send_hpgl(port, "", lambda d, t: None, aborted, inter_line_delay_s=0.0)
     assert result is True
     assert port.events == []
+
+
+def test_inter_line_delay_paces_transmission():
+    import time as _time
+    port = FakePort()
+    aborted = threading.Event()
+    hpgl = "A;\nB;\nC;\nD;\nE;\n"
+    t0 = _time.monotonic()
+    send_hpgl(port, hpgl, lambda d, t: None, aborted, inter_line_delay_s=0.01)
+    elapsed = _time.monotonic() - t0
+    # 5 lines * 10 ms = 50 ms minimum
+    assert elapsed >= 0.045, f"expected ≥ 45 ms pacing, saw {elapsed*1000:.1f} ms"
 
 
 def test_permission_error_translated_to_danish_systemindstillinger_message():

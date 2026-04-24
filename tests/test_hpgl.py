@@ -57,7 +57,9 @@ def test_horizontal_line_scales_to_40_units_per_mm():
     top_y = 50 * UNITS_PER_MM  # 2000
     assert f"PU0,{top_y};" in out
     assert f"PD400,{top_y};" in out
-    assert out.count("PU;") == 1  # one lift after the polyline
+    # No standalone pen-lift — the next PU<x>,<y>; (or the footer PU0,0;)
+    # handles the lift as part of its own move.
+    assert "PU;" not in out
 
 
 def test_y_flip_places_svg_origin_at_top():
@@ -88,16 +90,19 @@ def test_rounding_uses_banker_round_not_truncation():
     assert any(ln.startswith("PD0,") for ln in out_dn)
 
 
-def test_multiple_polylines_each_get_pen_up_lift():
+def test_multiple_polylines_each_get_pen_up_travel_to_next_start():
     polys = [
         [(0.0, 0.0), (10.0, 0.0)],
         [(20.0, 0.0), (30.0, 0.0)],
         [(40.0, 0.0), (50.0, 0.0)],
     ]
     out = split(polylines_to_hpgl(polys, height_mm=50.0))
-    # One PU; pen-lift after each polyline (not counting the PU<x>,<y>; travels)
-    pen_lifts = [ln for ln in out if ln == "PU;"]
-    assert len(pen_lifts) == 3
+    # Each polyline starts with a PU<x>,<y>; travel to its first point.
+    # Header PU0,0; + 3 polyline travels + footer PU0,0; = 5 pen-up moves.
+    pu_with_coords = [ln for ln in out if ln.startswith("PU") and "," in ln]
+    assert len(pu_with_coords) == 5
+    # Standalone PU; must NOT appear — redundant and problematic on RS720C.
+    assert "PU;" not in out
 
 
 def test_single_point_polyline_is_skipped():

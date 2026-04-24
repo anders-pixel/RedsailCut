@@ -85,13 +85,29 @@ def open_cutter(
         raise SerialError(f"Kunne ikke åbne porten {port}: {e}") from e
 
 
+DEFAULT_INTER_LINE_DELAY_S = 0.02
+
+
 def send_hpgl(
     ser: SerialPortLike,
     hpgl: str,
     on_progress: Callable[[int, int], None],
     abort_flag: threading.Event,
+    inter_line_delay_s: float = DEFAULT_INTER_LINE_DELAY_S,
 ) -> bool:
-    """Send HPGL line-by-line. Returns True on normal completion, False if aborted."""
+    """Send HPGL line-by-line. Returns True on normal completion, False if aborted.
+
+    `inter_line_delay_s` paces transmission so the cutter's input buffer
+    doesn't overflow. At 9600 baud we can transmit ~80 short lines/sec, but
+    a cheap cutter like the Redsail RS720C only executes a handful of HPGL
+    commands per second (each one moves the head). Without pacing and with
+    no hardware flow control, bytes arrive faster than the cutter can drain
+    them; the buffer silently drops commands, the cutter loses track of
+    absolute position, and the carriage eventually wanders off-paper.
+    20 ms per line (~50 lines/sec) matches the cutter's execution rate on
+    typical small moves — adds ~20 s to a 1000-line job, which is a
+    rounding error next to an actual cut.
+    """
     lines = hpgl.splitlines(keepends=True)
     total = len(lines)
     for i, line in enumerate(lines):
@@ -102,6 +118,8 @@ def send_hpgl(
         ser.write(line.encode("ascii"))
         ser.flush()
         on_progress(i + 1, total)
+        if inter_line_delay_s > 0:
+            time.sleep(inter_line_delay_s)
     return True
 
 

@@ -54,7 +54,10 @@ def polylines_to_hpgl(
         for x_mm, y_mm in pts[1:]:
             xu, yu = to_units(x_mm, y_mm)
             lines.append(f"PD{xu},{yu};")
-        lines.append("PU;")
+        # No standalone `PU;` here — the next polyline's first command is
+        # `PU<x>,<y>;` which lifts the pen as part of its move. The standalone
+        # form is redundant and some cutters (RS720C among them) appear to
+        # mis-parse or drop state transitions when it appears inside a stream.
 
     lines.append("PU0,0;")
     lines.append("SP0;")
