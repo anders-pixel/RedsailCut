@@ -107,3 +107,12 @@ class AppSettings:
     @corner_threshold_deg.setter
     def corner_threshold_deg(self, v: int) -> None:
         self._s.setValue("corner_threshold_deg", int(v))
+
+    # Path ordering
+    @property
+    def sort_inside_first(self) -> bool:
+        return bool(self._s.value("sort_inside_first", True, type=bool))
+
+    @sort_inside_first.setter
+    def sort_inside_first(self, v: bool) -> None:
+        self._s.setValue("sort_inside_first", bool(v))

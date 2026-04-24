@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import (
 
 from redsailcut.blade_offset import compensate_polylines
 from redsailcut.hpgl import polylines_to_hpgl
+from redsailcut.path_order import sort_inside_first as sort_polylines_inside_first
 from redsailcut.preview import PreviewWidget
 from redsailcut.serial_io import (
     FlowControl,
@@ -241,6 +242,13 @@ class MainWindow(QMainWindow):
         self._spin_force.valueChanged.connect(self._on_force_changed)
         pf.addRow("Speed:", self._spin_speed)
         pf.addRow("Force:", self._spin_force)
+        self._chk_sort = QCheckBox("Skær indvendige former først")
+        self._chk_sort.setToolTip(
+            "Skærer indvendige detaljer før ydre konturer. Forhindrer at "
+            "vinyl-stykker skrider under skæring."
+        )
+        self._chk_sort.toggled.connect(self._on_sort_inside_first_changed)
+        pf.addRow(self._chk_sort)
         c_layout.addWidget(params_box)
 
         # Blade compensation group (drag-knife offset)
@@ -324,6 +332,7 @@ class MainWindow(QMainWindow):
         self._spin_offset.setValue(self._settings.blade_offset_mm)
         self._spin_overcut.setValue(self._settings.overcut_mm)
         self._spin_corner.setValue(self._settings.corner_threshold_deg)
+        self._chk_sort.setChecked(self._settings.sort_inside_first)
         self._update_overcut_enabled()
         baud = self._settings.baud
         idx = self._cmb_baud.findData(baud)
@@ -357,6 +366,10 @@ class MainWindow(QMainWindow):
 
     def _on_corner_threshold_changed(self, v: int) -> None:
         self._settings.corner_threshold_deg = v
+        self._refresh_estimate()
+
+    def _on_sort_inside_first_changed(self, v: bool) -> None:
+        self._settings.sort_inside_first = v
         self._refresh_estimate()
 
     def _on_baud_changed(self, idx: int) -> None:
@@ -518,8 +531,9 @@ class MainWindow(QMainWindow):
             self._lbl_est.setText("Est. time: —")
             self._lbl_warn.setVisible(False)
             return
-        # Apply blade compensation before length calculation so the estimate
-        # reflects what's actually going to be sent.
+        # Run the same pipeline as the real cut so the estimate is faithful.
+        if self._chk_sort.isChecked():
+            polylines = sort_polylines_inside_first(polylines)
         polylines = compensate_polylines(
             polylines,
             offset_mm=self._spin_offset.value(),
@@ -580,6 +594,8 @@ class MainWindow(QMainWindow):
         try:
             polylines, w_mm, h_mm = svg_to_polylines(
                 self._svg_path, target_width_mm=width_mm)
+            if self._chk_sort.isChecked():
+                polylines = sort_polylines_inside_first(polylines)
             polylines = compensate_polylines(
                 polylines,
                 offset_mm=self._spin_offset.value(),
