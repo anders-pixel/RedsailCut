@@ -40,6 +40,7 @@ from redsailcut.blade_offset import compensate_polylines
 from redsailcut.hpgl import polylines_to_hpgl
 from redsailcut.path_order import sort_inside_first as sort_polylines_inside_first
 from redsailcut.preview import PreviewWidget
+from redsailcut.sharp_corners import add_pivots as add_sharp_corner_pivots
 from redsailcut.serial_io import (
     FlowControl,
     SerialError,
@@ -280,6 +281,23 @@ class MainWindow(QMainWindow):
         bf.addRow("Offset:", self._spin_offset)
         bf.addRow("Overcut:", self._spin_overcut)
         bf.addRow("Corner threshold:", self._spin_corner)
+        self._chk_lift = QCheckBox("Løft kniv ved spidse hjørner")
+        self._chk_lift.setToolTip(
+            "Løfter kniven når designet har meget spidse hjørner. "
+            "Hjælper især på kursiv tekst og fine ornamenter."
+        )
+        self._chk_lift.toggled.connect(self._on_lift_sharp_changed)
+        self._spin_sharp = QSpinBox()
+        self._spin_sharp.setRange(5, 60)
+        self._spin_sharp.setSingleStep(1)
+        self._spin_sharp.setSuffix(" °")
+        self._spin_sharp.setToolTip(
+            "Hjørner med åbning under denne grænse løftes. Kun aktiv når "
+            "offset > 0."
+        )
+        self._spin_sharp.valueChanged.connect(self._on_sharp_threshold_changed)
+        bf.addRow(self._chk_lift)
+        bf.addRow("Grænse:", self._spin_sharp)
         c_layout.addWidget(blade_box)
 
         # Dry run + est time
@@ -333,7 +351,10 @@ class MainWindow(QMainWindow):
         self._spin_overcut.setValue(self._settings.overcut_mm)
         self._spin_corner.setValue(self._settings.corner_threshold_deg)
         self._chk_sort.setChecked(self._settings.sort_inside_first)
+        self._chk_lift.setChecked(self._settings.lift_sharp_corners)
+        self._spin_sharp.setValue(self._settings.sharp_corner_threshold_deg)
         self._update_overcut_enabled()
+        self._update_sharp_enabled()
         baud = self._settings.baud
         idx = self._cmb_baud.findData(baud)
         if idx >= 0:
@@ -348,6 +369,13 @@ class MainWindow(QMainWindow):
         # Overcut only meaningful when offset > 0
         self._spin_overcut.setEnabled(self._spin_offset.value() > 0)
 
+    def _update_sharp_enabled(self) -> None:
+        # Sharp-corner lift only effective with drag-knife (offset > 0);
+        # threshold spinbox only editable when the feature is on.
+        has_offset = self._spin_offset.value() > 0
+        self._chk_lift.setEnabled(has_offset)
+        self._spin_sharp.setEnabled(has_offset and self._chk_lift.isChecked())
+
     def _on_speed_changed(self, v: int) -> None:
         self._settings.speed = v
         self._refresh_estimate()
@@ -358,6 +386,7 @@ class MainWindow(QMainWindow):
     def _on_offset_changed(self, v: float) -> None:
         self._settings.blade_offset_mm = v
         self._update_overcut_enabled()
+        self._update_sharp_enabled()
         self._refresh_estimate()
 
     def _on_overcut_changed(self, v: float) -> None:
@@ -370,6 +399,15 @@ class MainWindow(QMainWindow):
 
     def _on_sort_inside_first_changed(self, v: bool) -> None:
         self._settings.sort_inside_first = v
+        self._refresh_estimate()
+
+    def _on_lift_sharp_changed(self, v: bool) -> None:
+        self._settings.lift_sharp_corners = v
+        self._update_sharp_enabled()
+        self._refresh_estimate()
+
+    def _on_sharp_threshold_changed(self, v: int) -> None:
+        self._settings.sharp_corner_threshold_deg = v
         self._refresh_estimate()
 
     def _on_baud_changed(self, idx: int) -> None:
@@ -534,6 +572,10 @@ class MainWindow(QMainWindow):
         # Run the same pipeline as the real cut so the estimate is faithful.
         if self._chk_sort.isChecked():
             polylines = sort_polylines_inside_first(polylines)
+        if (self._chk_lift.isChecked() and self._spin_offset.value() > 0):
+            polylines = add_sharp_corner_pivots(
+                polylines, threshold_deg=self._spin_sharp.value()
+            )
         polylines = compensate_polylines(
             polylines,
             offset_mm=self._spin_offset.value(),
@@ -596,6 +638,10 @@ class MainWindow(QMainWindow):
                 self._svg_path, target_width_mm=width_mm)
             if self._chk_sort.isChecked():
                 polylines = sort_polylines_inside_first(polylines)
+            if (self._chk_lift.isChecked() and self._spin_offset.value() > 0):
+                polylines = add_sharp_corner_pivots(
+                    polylines, threshold_deg=self._spin_sharp.value()
+                )
             polylines = compensate_polylines(
                 polylines,
                 offset_mm=self._spin_offset.value(),

@@ -116,3 +116,20 @@ class AppSettings:
     @sort_inside_first.setter
     def sort_inside_first(self, v: bool) -> None:
         self._s.setValue("sort_inside_first", bool(v))
+
+    # Sharp-corner pivots
+    @property
+    def lift_sharp_corners(self) -> bool:
+        return bool(self._s.value("lift_sharp_corners", True, type=bool))
+
+    @lift_sharp_corners.setter
+    def lift_sharp_corners(self, v: bool) -> None:
+        self._s.setValue("lift_sharp_corners", bool(v))
+
+    @property
+    def sharp_corner_threshold_deg(self) -> int:
+        return int(self._s.value("sharp_corner_threshold_deg", 30, type=int))
+
+    @sharp_corner_threshold_deg.setter
+    def sharp_corner_threshold_deg(self, v: int) -> None:
+        self._s.setValue("sharp_corner_threshold_deg", int(v))
