@@ -58,7 +58,7 @@ from redsailcut.svg_parser import (
 
 WARN_WIDTH_MM = 400.0
 WARN_TIME_MINUTES = 60.0
-PEN_UP_SPEED_FACTOR = 2.0  # travel is roughly twice cut speed on most cutters
+PEN_UP_SPEED_FACTOR = 1.0  # conservative: serial pacing waits for travel too
 
 BAUD_CHOICES = [9600, 19200, 38400]
 

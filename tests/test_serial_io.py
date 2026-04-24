@@ -1,5 +1,5 @@
 import threading
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 import serial
@@ -97,6 +97,41 @@ def test_inter_line_delay_paces_transmission():
     elapsed = _time.monotonic() - t0
     # 5 lines * 10 ms = 50 ms minimum
     assert elapsed >= 0.045, f"expected ≥ 45 ms pacing, saw {elapsed*1000:.1f} ms"
+
+
+def test_motion_pacing_waits_for_physical_pd_move_time():
+    port = FakePort()
+    aborted = threading.Event()
+    # 1200 HPGL units = 30 mm. VS3 = 30 mm/s, so the move takes ~1 second.
+    hpgl = "VS3;\nPU0,0;\nPD1200,0;\n"
+
+    with patch("redsailcut.serial_io.time.sleep") as sleep:
+        send_hpgl(port, hpgl, lambda d, t: None, aborted, inter_line_delay_s=0.02)
+
+    assert sleep.call_args_list == [call(0.02), call(0.02), call(1.0)]
+
+
+def test_motion_pacing_waits_for_physical_pu_travel_too():
+    port = FakePort()
+    aborted = threading.Event()
+    # 400 HPGL units = 10 mm. VS10 = 100 mm/s, so the travel takes ~0.1 s.
+    hpgl = "VS10;\nPU400,0;\n"
+
+    with patch("redsailcut.serial_io.time.sleep") as sleep:
+        send_hpgl(port, hpgl, lambda d, t: None, aborted, inter_line_delay_s=0.02)
+
+    assert sleep.call_args_list == [call(0.02), call(0.1)]
+
+
+def test_zero_inter_line_delay_disables_all_pacing_sleep():
+    port = FakePort()
+    aborted = threading.Event()
+    hpgl = "VS3;\nPU0,0;\nPD1200,0;\n"
+
+    with patch("redsailcut.serial_io.time.sleep") as sleep:
+        send_hpgl(port, hpgl, lambda d, t: None, aborted, inter_line_delay_s=0.0)
+
+    sleep.assert_not_called()
 
 
 def test_permission_error_translated_to_danish_systemindstillinger_message():
