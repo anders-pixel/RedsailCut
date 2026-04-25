@@ -60,6 +60,35 @@ def sort_inside_first(
     return sorted_closed + sorted_open
 
 
+def sort_nearest_neighbor(
+    polylines: Sequence[Sequence[tuple[float, float]]],
+    start: tuple[float, float] | None = None,
+) -> list[Polyline]:
+    """Order paths to minimise pen-up travel without changing path direction."""
+    remaining = [list(p) for p in polylines]
+    if not remaining:
+        return []
+
+    if start is None:
+        ordered = [remaining.pop(0)]
+    else:
+        best_i = min(
+            range(len(remaining)),
+            key=lambda idx: _distance(start, _first_point(remaining[idx])),
+        )
+        ordered = [remaining.pop(best_i)]
+    current = _last_point(ordered[-1])
+    while remaining:
+        best_i = min(
+            range(len(remaining)),
+            key=lambda idx: _distance(current, _first_point(remaining[idx])),
+        )
+        polyline = remaining.pop(best_i)
+        ordered.append(polyline)
+        current = _last_point(polyline)
+    return ordered
+
+
 def _is_closed(points: Polyline) -> bool:
     return (
         abs(points[0][0] - points[-1][0]) < CLOSURE_TOLERANCE_MM
@@ -84,3 +113,17 @@ def _bbox_contains(
 
 def _min_y(points: Polyline) -> float:
     return min((y for _, y in points), default=0.0)
+
+
+def _first_point(points: Polyline) -> tuple[float, float]:
+    return points[0] if points else (0.0, 0.0)
+
+
+def _last_point(points: Polyline) -> tuple[float, float]:
+    return points[-1] if points else (0.0, 0.0)
+
+
+def _distance(a: tuple[float, float], b: tuple[float, float]) -> float:
+    dx = b[0] - a[0]
+    dy = b[1] - a[1]
+    return (dx * dx + dy * dy) ** 0.5

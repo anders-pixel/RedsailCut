@@ -142,8 +142,7 @@ pytest
   second)
 - Blade offset, inside-first ordering, sharp-corner pivots
 - Serial I/O with mocks: ordered writes, mid-stream abort sequence,
-  Danish user-facing permission-error message, motion-aware pacing
-  math
+  English user-facing permission-error message, motion-aware pacing math
 
 ## Acknowledgements
 

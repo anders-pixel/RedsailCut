@@ -1,6 +1,12 @@
 import pytest
 
-from redsailcut.hpgl import UNITS_PER_MM, polylines_to_hpgl
+from redsailcut.hpgl import (
+    HpglSafetyError,
+    MAX_PD_COORD_PAIRS,
+    UNITS_PER_MM,
+    polylines_to_hpgl,
+    validate_hpgl_safety,
+)
 
 
 def split(hpgl: str) -> list[str]:
@@ -16,7 +22,7 @@ def test_empty_polylines_emits_header_and_footer_only():
         "FS80;",
         "PA;",
         "PU0,0;",
-        "PU0,0;",
+        "PU;",
         "SP0;",
     ]
 
@@ -57,9 +63,7 @@ def test_horizontal_line_scales_to_40_units_per_mm():
     top_y = 50 * UNITS_PER_MM  # 2000
     assert f"PU0,{top_y};" in out
     assert f"PD400,{top_y};" in out
-    # No standalone pen-lift — the next PU<x>,<y>; (or the footer PU0,0;)
-    # handles the lift as part of its own move.
-    assert "PU;" not in out
+    assert "PU;" in out
 
 
 def test_y_flip_places_svg_origin_at_top():
@@ -98,11 +102,22 @@ def test_multiple_polylines_each_get_pen_up_travel_to_next_start():
     ]
     out = split(polylines_to_hpgl(polys, height_mm=50.0))
     # Each polyline starts with a PU<x>,<y>; travel to its first point.
-    # Header PU0,0; + 3 polyline travels + footer PU0,0; = 5 pen-up moves.
+    # Header PU0,0; + 3 polyline travels = 4 coordinate pen-up moves.
     pu_with_coords = [ln for ln in out if ln.startswith("PU") and "," in ln]
-    assert len(pu_with_coords) == 5
-    # Standalone PU; must NOT appear — redundant and problematic on RS720C.
-    assert "PU;" not in out
+    assert len(pu_with_coords) == 4
+    # Standalone PU; gives the tool time to lift before coordinate travel.
+    assert out.count("PU;") == 4
+
+
+def test_pd_coordinates_are_sent_one_per_command_for_redsail_compatibility():
+    poly = [(float(x), 0.0) for x in range(20)]
+    out = split(polylines_to_hpgl([poly], height_mm=10.0))
+    pd_lines = [ln for ln in out if ln.startswith("PD")]
+
+    assert len(pd_lines) == 19
+    first_numbers = pd_lines[0][2:-1].split(",")
+    assert len(first_numbers) == MAX_PD_COORD_PAIRS * 2
+    assert pd_lines[0] == "PD40,400;"
 
 
 def test_single_point_polyline_is_skipped():
@@ -113,10 +128,9 @@ def test_single_point_polyline_is_skipped():
     assert len(pd_lines) == 1
 
 
-def test_footer_returns_to_origin_and_deselects_pen():
+def test_footer_lifts_and_deselects_pen_without_return_travel():
     out = split(polylines_to_hpgl([[(0.0, 0.0), (1.0, 0.0)]], height_mm=10.0))
-    assert out[-2] == "PU0,0;"
-    assert out[-1] == "SP0;"
+    assert out[-2:] == ["PU;", "SP0;"]
 
 
 def test_invalid_height_raises():
@@ -124,6 +138,38 @@ def test_invalid_height_raises():
         polylines_to_hpgl([], height_mm=0.0)
     with pytest.raises(ValueError):
         polylines_to_hpgl([], height_mm=-1.0)
+
+
+def test_large_coordinates_are_allowed_for_wide_cutters():
+    out = split(polylines_to_hpgl([[(0.0, 0.0), (600.0, 0.0)]], height_mm=10.0))
+    assert "PU0,400;" in out
+    assert "PD24000,400;" in out
+
+
+def test_negative_compensation_points_are_shifted_positive():
+    out = split(polylines_to_hpgl([[(-1.0, 0.0), (0.0, 0.0)]], height_mm=10.0))
+    assert "PU0,400;" in out
+    assert "PD40,400;" in out
+    movement_lines = [ln for ln in out if ln.startswith(("PU", "PD"))]
+    assert not any("-" in ln for ln in movement_lines)
+
+
+def test_preflight_allows_600mm_cut_segment_when_limit_matches_job():
+    hpgl = polylines_to_hpgl([[(0.0, 0.0), (600.0, 0.0)]], height_mm=10.0)
+    report = validate_hpgl_safety(hpgl, max_cut_segment_mm=625.0)
+    assert report.max_cut_segment_mm == pytest.approx(600.0)
+
+
+def test_preflight_rejects_suspicious_long_cut_segment():
+    hpgl = "IN;\nPA;\nPU0,0;\nPD24000,16000;\nSP0;\n"
+    with pytest.raises(HpglSafetyError, match="cutting segment"):
+        validate_hpgl_safety(hpgl, max_cut_segment_mm=625.0)
+
+
+def test_preflight_rejects_negative_coordinates():
+    hpgl = "IN;\nPA;\nPU-1,0;\nPD40,0;\nSP0;\n"
+    with pytest.raises(HpglSafetyError, match="negative coordinates"):
+        validate_hpgl_safety(hpgl, max_cut_segment_mm=100.0)
 
 
 @pytest.mark.parametrize("speed", [0, 81, -5])

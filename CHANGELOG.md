@@ -4,6 +4,39 @@ All notable changes to RedsailCut will be recorded here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Import cleanup presets for noisy/traced SVGs, including optional curve
+  smoothing.
+- Optimized-polyline preview so the GUI displays the geometry that will be sent
+  to HPGL.
+- HPGL safety preflight that rejects negative coordinates and suspiciously long
+  cutting segments before dry-run output or serial streaming.
+- Nearest-neighbor path ordering when inside-first cutting is disabled.
+- Repo maintenance notes for future Codex sessions in `AGENTS.md`,
+  `docs/ASSISTANT_BRIEF.md`, and `docs/TODO.md`.
+
+### Changed
+
+- GUI and user-facing errors are English-only.
+- Default splitter layout starts preview and settings at equal width.
+- HPGL generation allows 580-600 mm wide jobs instead of blocking above the old
+  16383-unit guard.
+- Pen-up travel now emits explicit `PU;` lift commands and serial streaming
+  waits briefly for the tool to lift before long travel moves.
+- Final return-to-origin travel was removed to avoid an unnecessary long
+  pen-up move at the end of large jobs.
+- Curve flattening and cleanup reduce micro-segments that can make the cutter
+  vibrate on circles and ornamental curves.
+
+### Fixed
+
+- Blade compensation points outside the artboard are normalized into positive
+  HPGL coordinates.
+- Large A2-width dry runs no longer fail because of the old safe-range guard.
+
 ## [0.1.0] — 2026-04-24
 
 First public release. Hardware-verified on a Redsail RS720C.

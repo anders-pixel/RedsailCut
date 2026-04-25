@@ -37,8 +37,16 @@ from PyQt6.QtWidgets import (
 )
 
 from redsailcut.blade_offset import compensate_polylines
-from redsailcut.hpgl import polylines_to_hpgl
-from redsailcut.path_order import sort_inside_first as sort_polylines_inside_first
+from redsailcut.cut_optimizer import options_for_import_cleanup
+from redsailcut.hpgl import (
+    HpglSafetyError,
+    polylines_to_hpgl,
+    validate_hpgl_safety,
+)
+from redsailcut.path_order import (
+    sort_inside_first as sort_polylines_inside_first,
+    sort_nearest_neighbor as sort_polylines_nearest_neighbor,
+)
 from redsailcut.preview import PreviewWidget
 from redsailcut.rotate import rotate_polylines
 from redsailcut.sharp_corners import add_pivots as add_sharp_corner_pivots
@@ -53,12 +61,14 @@ from redsailcut.settings import AppSettings
 from redsailcut.svg_parser import (
     Polyline,
     svg_to_polylines,
+    svg_to_polylines_with_report,
     total_cut_length_mm,
     total_travel_length_mm,
 )
 
 WARN_WIDTH_MM = 400.0
 WARN_TIME_MINUTES = 60.0
+SAFETY_SEGMENT_MARGIN_MM = 25.0
 PEN_UP_SPEED_FACTOR = 1.0  # conservative: serial pacing waits for travel too
 
 BAUD_CHOICES = [9600, 19200, 38400]
@@ -90,11 +100,11 @@ class CutJob(QThread):
         except SerialError as e:
             self.error.emit(str(e))
             return
-        self.log.emit(f"Port åbnet: {self._port} @ {self._baud} baud")
+        self.log.emit(f"Port opened: {self._port} @ {self._baud} baud")
         try:
             ok = send_hpgl(ser, self._hpgl, self.progress.emit, self.abort_flag)
         except Exception as e:  # noqa: BLE001  — surface any unexpected I/O error
-            self.error.emit(f"Fejl under skæring: {e}")
+            self.error.emit(f"Cutting error: {e}")
             return
         finally:
             try:
@@ -123,7 +133,7 @@ class MainWindow(QMainWindow):
         self._load_ports()
         self._apply_settings_to_ui()
         self._update_cut_button_state()
-        self._log("Klar. Åbn en SVG for at starte.")
+        self._log("Ready. Open an SVG to start.")
 
     # --- UI construction ---------------------------------------------------
     def _build_menu(self) -> None:
@@ -186,8 +196,9 @@ class MainWindow(QMainWindow):
         controls = QWidget()
         c_layout = QVBoxLayout(controls)
         splitter.addWidget(controls)
-        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
+        splitter.setSizes([1, 1])
 
         # Size group
         size_box = QGroupBox("Size")
@@ -214,14 +225,29 @@ class MainWindow(QMainWindow):
         ]:
             self._cmb_rotation.addItem(label, deg)
         self._cmb_rotation.setToolTip(
-            "Rotér motivet 90° ad gangen. Brug det til at få SVG'en til at "
-            "matche cutterens fysiske origin (typisk nederst-til-højre på rullen)."
+            "Rotate the design in 90° steps. Use this to match the cutter's "
+            "physical origin, usually bottom-right on the roll."
         )
         self._cmb_rotation.currentIndexChanged.connect(self._on_rotation_changed)
         sf.addRow("Width:", self._spin_width)
         sf.addRow("Height:", self._spin_height)
         sf.addRow(self._chk_lock)
         sf.addRow("Rotation:", self._cmb_rotation)
+        self._cmb_cleanup = QComboBox()
+        for mode, label in [
+            ("strong", "Strong (recommended)"),
+            ("normal", "Normal"),
+            ("max", "Maximum"),
+            ("smooth", "Smooth curves"),
+            ("off", "Off"),
+        ]:
+            self._cmb_cleanup.addItem(label, mode)
+        self._cmb_cleanup.setToolTip(
+            "Cleans traced/noisy SVGs on import. Smooth curves can improve "
+            "ornaments, but will also slightly round sharp corners."
+        )
+        self._cmb_cleanup.currentIndexChanged.connect(self._on_cleanup_changed)
+        sf.addRow("Import cleanup:", self._cmb_cleanup)
         c_layout.addWidget(size_box)
 
         # Cutter group
@@ -258,10 +284,10 @@ class MainWindow(QMainWindow):
         self._spin_force.valueChanged.connect(self._on_force_changed)
         pf.addRow("Speed:", self._spin_speed)
         pf.addRow("Force:", self._spin_force)
-        self._chk_sort = QCheckBox("Skær indvendige former først")
+        self._chk_sort = QCheckBox("Cut inside shapes first")
         self._chk_sort.setToolTip(
-            "Skærer indvendige detaljer før ydre konturer. Forhindrer at "
-            "vinyl-stykker skrider under skæring."
+            "Cuts inner details before outer contours. Prevents loose vinyl "
+            "pieces from shifting during cutting."
         )
         self._chk_sort.toggled.connect(self._on_sort_inside_first_changed)
         pf.addRow(self._chk_sort)
@@ -296,10 +322,10 @@ class MainWindow(QMainWindow):
         bf.addRow("Offset:", self._spin_offset)
         bf.addRow("Overcut:", self._spin_overcut)
         bf.addRow("Corner threshold:", self._spin_corner)
-        self._chk_lift = QCheckBox("Løft kniv ved spidse hjørner")
+        self._chk_lift = QCheckBox("Lift knife at sharp corners")
         self._chk_lift.setToolTip(
-            "Løfter kniven når designet har meget spidse hjørner. "
-            "Hjælper især på kursiv tekst og fine ornamenter."
+            "Lifts the knife at very sharp design corners. Especially useful "
+            "for script text and fine ornaments."
         )
         self._chk_lift.toggled.connect(self._on_lift_sharp_changed)
         self._spin_sharp = QSpinBox()
@@ -307,12 +333,12 @@ class MainWindow(QMainWindow):
         self._spin_sharp.setSingleStep(1)
         self._spin_sharp.setSuffix(" °")
         self._spin_sharp.setToolTip(
-            "Hjørner med åbning under denne grænse løftes. Kun aktiv når "
+            "Corners below this opening angle are lifted. Only active when "
             "offset > 0."
         )
         self._spin_sharp.valueChanged.connect(self._on_sharp_threshold_changed)
         bf.addRow(self._chk_lift)
-        bf.addRow("Grænse:", self._spin_sharp)
+        bf.addRow("Threshold:", self._spin_sharp)
         c_layout.addWidget(blade_box)
 
         # Dry run + est time
@@ -371,6 +397,9 @@ class MainWindow(QMainWindow):
         idx = self._cmb_rotation.findData(self._settings.rotation_deg)
         if idx >= 0:
             self._cmb_rotation.setCurrentIndex(idx)
+        idx = self._cmb_cleanup.findData(self._settings.import_cleanup)
+        if idx >= 0:
+            self._cmb_cleanup.setCurrentIndex(idx)
         self._update_overcut_enabled()
         self._update_sharp_enabled()
         baud = self._settings.baud
@@ -427,20 +456,46 @@ class MainWindow(QMainWindow):
         self._reload_preview_with_current_size()
         self._refresh_estimate()
 
+    def _on_cleanup_changed(self, _idx: int) -> None:
+        mode = self._cmb_cleanup.currentData()
+        if mode is None:
+            return
+        self._settings.import_cleanup = str(mode)
+        self._reload_preview_with_current_size()
+        self._refresh_estimate()
+
+    def _optimizer_options(self):
+        mode = self._cmb_cleanup.currentData() or self._settings.import_cleanup
+        return options_for_import_cleanup(str(mode))
+
+    def _cleanup_label(self) -> str:
+        mode = self._cmb_cleanup.currentData() or self._settings.import_cleanup
+        return {
+            "off": "unoptimized",
+            "normal": "normal cleanup",
+            "strong": "strong cleanup",
+            "max": "maximum cleanup",
+            "smooth": "smoothed curves",
+        }.get(str(mode), "strong cleanup")
+
     def _reload_preview_with_current_size(self) -> None:
         if self._svg_path is None:
             return
-        # Pass the post-rotation dimensions and rotation angle to the preview
-        # so the visual orientation matches what we'll send to the cutter.
-        rot = int(self._cmb_rotation.currentData() or 0)
-        w_in = self._spin_width.value()
-        h_in = self._spin_height.value()
-        if rot in (90, 270):
-            display_w, display_h = h_in, w_in
-        else:
-            display_w, display_h = w_in, h_in
-        self._preview.load_svg(str(self._svg_path), display_w, display_h,
-                               rotation_deg=rot)
+        try:
+            polylines, w_mm, h_mm, _ = svg_to_polylines_with_report(
+                self._svg_path,
+                target_width_mm=self._spin_width.value(),
+                optimizer_options=self._optimizer_options(),
+            )
+        except Exception:
+            return
+        rotation_deg = int(self._cmb_rotation.currentData() or 0)
+        if rotation_deg:
+            polylines, w_mm, h_mm = rotate_polylines(
+                polylines, rotation_deg, w_mm, h_mm
+            )
+        label = self._cleanup_label() + (f"  ↻ {rotation_deg}°" if rotation_deg else "")
+        self._preview.load_polylines(polylines, w_mm, h_mm, label_extra=label)
 
     def _on_lift_sharp_changed(self, v: bool) -> None:
         self._settings.lift_sharp_corners = v
@@ -475,7 +530,7 @@ class MainWindow(QMainWindow):
     def _probe_connection(self) -> None:
         port = self._cmb_port.currentData()
         if not port:
-            QMessageBox.information(self, "Test connection", "Vælg en port først.")
+            QMessageBox.information(self, "Test connection", "Select a port first.")
             return
         baud = int(self._cmb_baud.currentData() or 9600)
         flow = self._settings.flow_control
@@ -484,16 +539,17 @@ class MainWindow(QMainWindow):
             report = probe_cutter(port, baud, flow=flow)
         except SerialError as e:
             QMessageBox.critical(self, "Probe error", str(e))
-            self._log(f"Probe-fejl: {e}")
+            self._log(f"Probe error: {e}")
             return
-        self._log("Probe-svar:\n" + report)
+        self._log("Probe response:\n" + report)
         QMessageBox.information(
             self, "Probe result",
-            f"Sendt til {port}:\n{report}\n\n"
-            "Hvis alle viser '(no reply)' modtager cutteren enten ikke bytes "
-            "(kabel/flow-control) eller understøtter ikke HP-GL/2-forespørgsler.\n"
-            "Hvis mindst én har et svar → kommunikation virker; problemet er "
-            "så command-fortolkning eller maskinens mode.",
+            f"Sent to {port}:\n{report}\n\n"
+            "If every query shows '(no reply)', the cutter either is not "
+            "receiving bytes (cable/flow-control) or does not support "
+            "HP-GL/2 query commands.\n"
+            "If at least one query has a response, communication works; the "
+            "problem is command parsing or the cutter's mode.",
         )
 
     # --- Ports -------------------------------------------------------------
@@ -501,7 +557,7 @@ class MainWindow(QMainWindow):
         current = self._cmb_port.currentData() or self._settings.port
         self._cmb_port.blockSignals(True)
         self._cmb_port.clear()
-        self._cmb_port.addItem("— vælg port —", "")
+        self._cmb_port.addItem("— select port —", "")
         ports = [p for p in serial.tools.list_ports.comports()
                  if p.device.startswith("/dev/cu.")]
         for p in ports:
@@ -512,13 +568,13 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             self._cmb_port.setCurrentIndex(idx)
         self._cmb_port.blockSignals(False)
-        self._log(f"Porte: {len(ports)} fundet")
+        self._log(f"Ports: {len(ports)} found")
         self._update_cut_button_state()
 
     # --- File open / drag-drop --------------------------------------------
     def _pick_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Åbn SVG", "", "SVG files (*.svg)")
+            self, "Open SVG", "", "SVG files (*.svg)")
         if path:
             self._load_svg(Path(path))
 
@@ -538,29 +594,37 @@ class MainWindow(QMainWindow):
 
     def _load_svg(self, path: Path) -> None:
         try:
-            polylines, w_mm, h_mm = svg_to_polylines(path, target_width_mm=400.0)
-        except Exception as e:  # noqa: BLE001
-            QMessageBox.critical(self, "SVG error", f"Kunne ikke læse SVG:\n{e}")
-            self._log(f"SVG-fejl: {e}")
-            return
-        self._svg_path = path
-        # Initial display width: the SVG's natural width (if known) or 400 fallback
-        # We scaled to 400mm above purely to get proportions; derive native width:
-        # svg_to_polylines returns (polylines, width_mm, height_mm) where width_mm
-        # is whatever we asked for. Reparse with width = SVG's own intended mm.
-        from svgelements import SVG
+            from svgelements import SVG
 
-        raw = SVG.parse(str(path), reify=True, ppi=96.0)
-        # svg.width is in user units (pixels at 96 DPI). Convert to mm.
-        natural_width_mm = float(raw.width) * 25.4 / 96.0
-        natural_height_mm = float(raw.height) * 25.4 / 96.0
+            raw = SVG.parse(str(path), reify=True, ppi=96.0)
+            # svg.width is in user units (pixels at 96 DPI). Convert to mm.
+            natural_width_mm = float(raw.width) * 25.4 / 96.0
+            natural_height_mm = float(raw.height) * 25.4 / 96.0
+            polylines, w_mm, h_mm, report = svg_to_polylines_with_report(
+                path,
+                target_width_mm=natural_width_mm,
+                optimizer_options=self._optimizer_options(),
+            )
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "SVG error", f"Could not read SVG:\n{e}")
+            self._log(f"SVG error: {e}")
+            return
+
+        self._svg_path = path
 
         self._src_width_mm = natural_width_mm
         self._src_height_mm = natural_height_mm
 
         self._file_label.setText(path.name)
-        self._log(f"SVG indlæst: {path.name}  ({len(polylines)} polylinjer, "
-                  f"{natural_width_mm:.1f}×{natural_height_mm:.1f} mm naturlig)")
+        self._log(f"SVG loaded: {path.name}  ({len(polylines)} optimized polylines, "
+                  f"{natural_width_mm:.1f}×{natural_height_mm:.1f} mm natural)")
+        if report is not None:
+            self._log(
+                "Import cleanup: "
+                f"points {report.input_points}->{report.output_points}, "
+                f"segments {report.input_segments}->{report.output_segments}, "
+                f"small <1mm {report.input_small_segments}->{report.output_small_segments}"
+            )
 
         # Set spinboxes without triggering recursive updates
         self._spin_width.blockSignals(True)
@@ -571,11 +635,10 @@ class MainWindow(QMainWindow):
         self._spin_height.blockSignals(False)
 
         rot = int(self._cmb_rotation.currentData() or 0)
-        if rot in (90, 270):
-            disp_w, disp_h = natural_height_mm, natural_width_mm
-        else:
-            disp_w, disp_h = natural_width_mm, natural_height_mm
-        self._preview.load_svg(str(path), disp_w, disp_h, rotation_deg=rot)
+        if rot:
+            polylines, w_mm, h_mm = rotate_polylines(polylines, rot, w_mm, h_mm)
+        label = self._cleanup_label() + (f"  ↻ {rot}°" if rot else "")
+        self._preview.load_polylines(polylines, w_mm, h_mm, label_extra=label)
         self._refresh_estimate()
         self._update_cut_button_state()
 
@@ -588,7 +651,7 @@ class MainWindow(QMainWindow):
             self._spin_height.blockSignals(True)
             self._spin_height.setValue(new_h)
             self._spin_height.blockSignals(False)
-        self._preview.update_size_label(v, self._spin_height.value())
+        self._reload_preview_with_current_size()
         self._refresh_estimate()
 
     def _on_height_changed(self, v: float) -> None:
@@ -599,7 +662,7 @@ class MainWindow(QMainWindow):
             self._spin_width.blockSignals(True)
             self._spin_width.setValue(new_w)
             self._spin_width.blockSignals(False)
-        self._preview.update_size_label(self._spin_width.value(), v)
+        self._reload_preview_with_current_size()
         self._refresh_estimate()
 
     # --- Estimation --------------------------------------------------------
@@ -610,19 +673,29 @@ class MainWindow(QMainWindow):
             return
         width_mm = self._spin_width.value()
         try:
-            polylines, _, _ = svg_to_polylines(self._svg_path, target_width_mm=width_mm)
+            polylines, _, _ = svg_to_polylines(
+                self._svg_path,
+                target_width_mm=width_mm,
+                optimizer_options=self._optimizer_options(),
+            )
         except Exception:
             self._lbl_est.setText("Est. time: —")
             self._lbl_warn.setVisible(False)
             return
         # Run the same pipeline as the real cut so the estimate is faithful.
         rotation_deg = int(self._cmb_rotation.currentData() or 0)
+        cut_width_mm = width_mm
+        cut_height_mm = self._spin_height.value()
         if rotation_deg:
-            polylines, _, _ = rotate_polylines(
+            polylines, cut_width_mm, cut_height_mm = rotate_polylines(
                 polylines, rotation_deg, width_mm, self._spin_height.value()
             )
         if self._chk_sort.isChecked():
             polylines = sort_polylines_inside_first(polylines)
+        else:
+            polylines = sort_polylines_nearest_neighbor(
+                polylines, start=(0.0, cut_height_mm)
+            )
         if (self._chk_lift.isChecked() and self._spin_offset.value() > 0):
             polylines = add_sharp_corner_pivots(
                 polylines, threshold_deg=self._spin_sharp.value()
@@ -643,19 +716,21 @@ class MainWindow(QMainWindow):
         self._lbl_est.setText(
             f"Est. time: {mins}m {ssec}s  (cut {cut_mm:.0f} mm + travel {travel_mm:.0f} mm)"
         )
-        self._update_warning_banner(width_mm, total_secs)
+        self._update_warning_banner(cut_width_mm, cut_height_mm, total_secs)
 
-    def _update_warning_banner(self, width_mm: float, total_secs: float) -> None:
+    def _update_warning_banner(
+        self, width_mm: float, height_mm: float, total_secs: float
+    ) -> None:
         warnings: list[str] = []
         if width_mm > WARN_WIDTH_MM:
             warnings.append(
-                f"Design er bredere end {WARN_WIDTH_MM:.0f} mm — nogle Redsail-modeller "
-                "har 16383-unit grænse; tjek at din maskine kan håndtere det."
+                f"Design is {width_mm:.0f} mm wide. The app allows it, but "
+                "runs HPGL preflight before sending to catch stray cut lines."
             )
         if total_secs > WARN_TIME_MINUTES * 60:
             mins = int(total_secs / 60)
             warnings.append(
-                f"Estimeret skæretid er {mins} min — overvej at dele designet op."
+                f"Estimated cut time is {mins} min — consider splitting the design."
             )
         if warnings:
             self._lbl_warn.setText("⚠  " + "  ".join(warnings))
@@ -671,9 +746,9 @@ class MainWindow(QMainWindow):
         enable = file_loaded and (dry or port_selected)
         self._btn_cut.setEnabled(enable)
         if not file_loaded:
-            self._btn_cut.setToolTip("Indlæs en SVG først")
+            self._btn_cut.setToolTip("Load an SVG first")
         elif not (dry or port_selected):
-            self._btn_cut.setToolTip("Vælg en port eller slå Dry run til")
+            self._btn_cut.setToolTip("Select a port or enable Dry run")
         else:
             self._btn_cut.setToolTip("")
 
@@ -686,7 +761,10 @@ class MainWindow(QMainWindow):
         force = self._spin_force.value()
         try:
             polylines, w_mm, h_mm = svg_to_polylines(
-                self._svg_path, target_width_mm=width_mm)
+                self._svg_path,
+                target_width_mm=width_mm,
+                optimizer_options=self._optimizer_options(),
+            )
             rotation_deg = int(self._cmb_rotation.currentData() or 0)
             if rotation_deg:
                 polylines, w_mm, h_mm = rotate_polylines(
@@ -694,6 +772,10 @@ class MainWindow(QMainWindow):
                 )
             if self._chk_sort.isChecked():
                 polylines = sort_polylines_inside_first(polylines)
+            else:
+                polylines = sort_polylines_nearest_neighbor(
+                    polylines, start=(0.0, h_mm)
+                )
             if (self._chk_lift.isChecked() and self._spin_offset.value() > 0):
                 polylines = add_sharp_corner_pivots(
                     polylines, threshold_deg=self._spin_sharp.value()
@@ -706,9 +788,17 @@ class MainWindow(QMainWindow):
             )
             hpgl = polylines_to_hpgl(polylines, height_mm=h_mm,
                                      speed_cm_s=speed, force_g=force)
+            max_cut_segment_mm = max(w_mm, h_mm) + SAFETY_SEGMENT_MARGIN_MM
+            safety = validate_hpgl_safety(
+                hpgl, max_cut_segment_mm=max_cut_segment_mm
+            )
+        except HpglSafetyError as e:
+            QMessageBox.critical(self, "HPGL safety stop", str(e))
+            self._log(f"HPGL safety stop: {e}")
+            return
         except Exception as e:  # noqa: BLE001
-            QMessageBox.critical(self, "Fejl", f"Kunne ikke generere HPGL:\n{e}")
-            self._log(f"HPGL-fejl: {e}")
+            QMessageBox.critical(self, "Error", f"Could not generate HPGL:\n{e}")
+            self._log(f"HPGL error: {e}")
             return
         if self._spin_offset.value() > 0:
             self._log(
@@ -716,6 +806,12 @@ class MainWindow(QMainWindow):
                 f"overcut={self._spin_overcut.value():.1f}mm, "
                 f"corner={self._spin_corner.value()}°"
             )
+        self._log(
+            "HPGL preflight OK: "
+            f"max cut {safety.max_cut_segment_mm:.1f} mm, "
+            f"max travel {safety.max_travel_segment_mm:.1f} mm, "
+            f"max coord {safety.max_coordinate_mm:.1f} mm"
+        )
 
         if self._chk_dry.isChecked():
             self._write_dry_run(hpgl)
@@ -736,8 +832,8 @@ class MainWindow(QMainWindow):
         try:
             out.write_text(hpgl, encoding="ascii")
         except OSError as e:
-            QMessageBox.critical(self, "Filfejl", f"Kunne ikke skrive .plt:\n{e}")
-            self._log(f"Filfejl: {e}")
+            QMessageBox.critical(self, "File error", f"Could not write .plt:\n{e}")
+            self._log(f"File error: {e}")
             return
         self._log(f"Dry run: {out}")
 
@@ -751,26 +847,26 @@ class MainWindow(QMainWindow):
         self._cut_job.finished.connect(self._cut_job_finalised)
         self._btn_cut.setEnabled(False)
         self._btn_stop.setVisible(True)
-        self._log(f"Start skæring → {port}")
+        self._log(f"Start cutting → {port}")
         self._cut_job.start()
 
     def _on_stop_clicked(self) -> None:
         if self._cut_job is not None:
             self._cut_job.abort_flag.set()
-            self._log("Stop anmodet — sender abort-sekvens…")
+            self._log("Stop requested — sending abort sequence…")
 
     def _on_progress(self, done: int, total: int) -> None:
-        self.statusBar().showMessage(f"Sender HPGL: {done}/{total}")
+        self.statusBar().showMessage(f"Sending HPGL: {done}/{total}")
 
     def _on_cut_error(self, msg: str) -> None:
         QMessageBox.critical(self, "Serial/cut error", msg)
-        self._log(f"FEJL: {msg}")
+        self._log(f"ERROR: {msg}")
 
     def _on_cut_finished(self, success: bool) -> None:
         if success:
-            self._log("Skæring færdig.")
+            self._log("Cut complete.")
         else:
-            self._log("Skæring afbrudt.")
+            self._log("Cut aborted.")
 
     def _cut_job_finalised(self) -> None:
         self._btn_stop.setVisible(False)

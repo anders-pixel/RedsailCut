@@ -8,6 +8,7 @@ from redsailcut.svg_parser import (
     _fast_segment_length,
     polyline_bbox,
     svg_to_polylines,
+    svg_to_polylines_with_report,
     total_cut_length_mm,
 )
 
@@ -77,6 +78,50 @@ def test_circle_radial_deviation_under_half_mm():
     # Max radial deviation from expected circle
     deviations = [abs(math.hypot(x - 20.0, y - 20.0) - 20.0) for x, y in points]
     assert max(deviations) < 0.5, f"worst deviation {max(deviations):.3f} mm"
+
+
+def test_circle_sampling_avoids_microstep_segments(tmp_path):
+    path = _write_svg(
+        tmp_path,
+        "circle.svg",
+        '<circle cx="16" cy="16" r="8" fill="none" stroke="black"/>',
+        width_mm=32,
+        height_mm=32,
+        viewbox="0 0 32 32",
+    )
+    polylines, _, _ = svg_to_polylines(path, target_width_mm=32.0)
+    assert len(polylines) == 1
+    points = polylines[0]
+    segments = [
+        math.hypot(x1 - x0, y1 - y0)
+        for (x0, y0), (x1, y1) in zip(points, points[1:])
+    ]
+    assert len(points) <= 60
+    assert min(segments) > 0.7
+    mid_deviations = [
+        abs(math.hypot(((x0 + x1) / 2) - 16.0, ((y0 + y1) / 2) - 16.0) - 8.0)
+        for (x0, y0), (x1, y1) in zip(points, points[1:])
+    ]
+    assert max(mid_deviations) < 0.1
+
+
+def test_svg_to_polylines_with_report_surfaces_import_optimization(tmp_path):
+    path = _write_svg(
+        tmp_path,
+        "noisy.svg",
+        '<path d="M 0 0 L 1 0.03 L 2 -0.04 L 3 0.02 L 4 0" stroke="black"/>',
+        width_mm=10,
+        height_mm=10,
+        viewbox="0 0 10 10",
+    )
+
+    polylines, _, _, report = svg_to_polylines_with_report(
+        path, target_width_mm=10.0
+    )
+
+    assert report is not None
+    assert report.input_points > report.output_points
+    assert len(polylines[0]) == 2
 
 
 def test_barcelona_fixture_bbox_matches_artboard_within_tolerance():

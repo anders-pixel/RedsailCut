@@ -25,11 +25,19 @@ from svgelements import (
     Shape,
 )
 
+from redsailcut.cut_optimizer import (
+    CutOptimizerOptions,
+    CutOptimizerReport,
+    DEFAULT_OPTIONS,
+    optimize_polylines_for_cutting,
+)
+
 Polyline = list[tuple[float, float]]
 
 MIN_SUBPATH_LENGTH_MM = 0.1
 MAX_CURVE_STEPS = 200
 MIN_CURVE_STEPS = 4
+TARGET_CURVE_SEGMENT_MM = 1.75
 PPI = 96.0
 
 _CURVE_TYPES = (CubicBezier, QuadraticBezier, Arc)
@@ -38,12 +46,32 @@ _CURVE_TYPES = (CubicBezier, QuadraticBezier, Arc)
 def svg_to_polylines(
     svg_path: str | FsPath,
     target_width_mm: float,
+    *,
+    optimize: bool = True,
+    optimizer_options: CutOptimizerOptions = DEFAULT_OPTIONS,
 ) -> tuple[list[Polyline], float, float]:
     """Parse SVG and return (polylines, width_mm, height_mm).
 
     Polylines are in SVG coordinate orientation: y grows downward, origin
     top-left. The HPGL layer is responsible for flipping Y.
     """
+    polylines, width_mm, height_mm, _ = svg_to_polylines_with_report(
+        svg_path,
+        target_width_mm,
+        optimize=optimize,
+        optimizer_options=optimizer_options,
+    )
+    return polylines, width_mm, height_mm
+
+
+def svg_to_polylines_with_report(
+    svg_path: str | FsPath,
+    target_width_mm: float,
+    *,
+    optimize: bool = True,
+    optimizer_options: CutOptimizerOptions = DEFAULT_OPTIONS,
+) -> tuple[list[Polyline], float, float, CutOptimizerReport | None]:
+    """Parse SVG into cut-ready polylines plus an import optimization report."""
     if target_width_mm <= 0:
         raise ValueError(f"target_width_mm must be positive, got {target_width_mm}")
 
@@ -73,7 +101,11 @@ def svg_to_polylines(
             if len(polyline) >= 2:
                 polylines.append(polyline)
 
-    return polylines, target_width_mm, height_mm
+    if optimize:
+        result = optimize_polylines_for_cutting(polylines, optimizer_options)
+        return result.polylines, target_width_mm, height_mm, result.report
+
+    return polylines, target_width_mm, height_mm, None
 
 
 def _fast_segment_length(segment) -> float:
@@ -131,7 +163,10 @@ def _subpath_to_polyline(sub: Path, scale: float) -> Polyline:
                 polyline.append((seg.end.x * scale, seg.end.y * scale))
         elif isinstance(seg, _CURVE_TYPES):
             seg_len_mm = _fast_segment_length(seg) * scale
-            steps = max(MIN_CURVE_STEPS, min(MAX_CURVE_STEPS, int(seg_len_mm * 2)))
+            steps = max(
+                MIN_CURVE_STEPS,
+                min(MAX_CURVE_STEPS, math.ceil(seg_len_mm / TARGET_CURVE_SEGMENT_MM)),
+            )
             # Skip i=0 — that's the endpoint of the previous segment, already appended.
             for i in range(1, steps + 1):
                 pt = seg.point(i / steps)

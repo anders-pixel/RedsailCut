@@ -92,6 +92,15 @@ class AppSettings:
     def rotation_deg(self, v: int) -> None:
         self._s.setValue("rotation_deg", int(v))
 
+    @property
+    def import_cleanup(self) -> str:
+        raw = self._s.value("import_cleanup", "strong", type=str)
+        return raw if raw in {"off", "normal", "strong", "max", "smooth"} else "strong"
+
+    @import_cleanup.setter
+    def import_cleanup(self, v: str) -> None:
+        self._s.setValue("import_cleanup", v)
+
     # Blade compensation (pen-mode defaults — users opt in)
     @property
     def blade_offset_mm(self) -> float:

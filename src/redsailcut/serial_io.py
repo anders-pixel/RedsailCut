@@ -5,8 +5,7 @@ adapters advertise it but mishandle it — fall back to XON/XOFF via the
 FlowControl enum if the user reports buffer overruns.
 
 Errors are normalised into `SerialError`, a user-facing exception whose
-message (in Danish, to match the GUI language) is safe to surface verbatim
-in a dialog or log line.
+message is safe to surface verbatim in a dialog or log line.
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ class FlowControl(enum.Enum):
 
 
 class SerialError(Exception):
-    """User-facing serial error. The message is in Danish and safe to show."""
+    """User-facing serial error. The message is safe to show."""
 
 
 class SerialPortLike(Protocol):
@@ -73,23 +72,25 @@ def open_cutter(
         return ser
     except PermissionError as e:
         raise SerialError(
-            f"macOS blokerer adgangen til porten ({port}). "
-            "Åbn Systemindstillinger > Privatliv & Sikkerhed og tillad "
-            "RedsailCut at bruge seriel kommunikation, og prøv igen."
+            f"macOS blocked access to the port ({port}). "
+            "Open System Settings > Privacy & Security, allow RedsailCut "
+            "to use serial communication, and try again."
         ) from e
     except serial.SerialException as e:
         # pyserial sometimes wraps PermissionError inside SerialException
         if isinstance(e.__cause__, PermissionError) or "permission" in str(e).lower():
             raise SerialError(
-                f"macOS blokerer adgangen til porten ({port}). "
-                "Åbn Systemindstillinger > Privatliv & Sikkerhed og tillad "
-                "RedsailCut at bruge seriel kommunikation, og prøv igen."
+                f"macOS blocked access to the port ({port}). "
+                "Open System Settings > Privacy & Security, allow RedsailCut "
+                "to use serial communication, and try again."
             ) from e
-        raise SerialError(f"Kunne ikke åbne porten {port}: {e}") from e
+        raise SerialError(f"Could not open port {port}: {e}") from e
 
 
 DEFAULT_INTER_LINE_DELAY_S = 0.02
 HPGL_UNITS_PER_MM = 40
+MOTION_LOOKAHEAD_S = 0.25
+PEN_UP_SETTLE_DELAY_S = 0.15
 _VS_DEFAULT_CM_S = 20
 _COORD_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
 
@@ -100,6 +101,7 @@ class _HpglPacingState:
     y: float = 0.0
     absolute: bool = True
     speed_cm_s: float = _VS_DEFAULT_CM_S
+    queued_motion_s: float = 0.0
 
 
 def send_hpgl(
@@ -112,11 +114,9 @@ def send_hpgl(
     """Send HPGL line-by-line. Returns True on normal completion, False if aborted.
 
     `inter_line_delay_s` is the minimum pacing delay. Coordinate-bearing
-    `PU`/`PD` commands wait for their estimated physical move time too, so
-    the cutter's small input buffer doesn't receive hundreds of commands while
-    the carriage is still executing one long move. With no reliable hardware
-    flow control, overflowing that buffer silently drops commands and desyncs
-    pen state/absolute position, producing random-looking lines.
+    `PU`/`PD` commands are paced by estimated physical move time while allowing
+    a small lookahead queue. That keeps the cutter fed through curves without
+    dumping the whole job into its small serial buffer.
     """
     lines = hpgl.splitlines(keepends=True)
     total = len(lines)
@@ -130,7 +130,9 @@ def send_hpgl(
         ser.flush()
         on_progress(i + 1, total)
         if inter_line_delay_s > 0:
-            time.sleep(_line_delay_s(line, pacing, inter_line_delay_s))
+            delay_s = _line_delay_s(line, pacing, inter_line_delay_s)
+            if delay_s > 0:
+                time.sleep(delay_s)
     return True
 
 
@@ -156,25 +158,27 @@ def _line_delay_s(
         try:
             speed = float(args)
         except ValueError:
-            return minimum_delay_s
+            return _consume_queued_motion(state, minimum_delay_s)
         if speed > 0:
             state.speed_cm_s = speed
-        return minimum_delay_s
+        return _consume_queued_motion(state, minimum_delay_s)
 
     if op == "PA":
         state.absolute = True
-        return minimum_delay_s
+        return _consume_queued_motion(state, minimum_delay_s)
 
     if op == "PR":
         state.absolute = False
-        return minimum_delay_s
+        return _consume_queued_motion(state, minimum_delay_s)
 
     if op not in {"PU", "PD"}:
-        return minimum_delay_s
+        return _consume_queued_motion(state, minimum_delay_s)
 
     numbers = [float(m.group(0)) for m in _COORD_RE.finditer(args)]
     if len(numbers) < 2:
-        return minimum_delay_s
+        if op == "PU":
+            return max(minimum_delay_s, PEN_UP_SETTLE_DELAY_S)
+        return 0.0
 
     distance_units = 0.0
     for x_arg, y_arg in zip(numbers[0::2], numbers[1::2]):
@@ -187,7 +191,16 @@ def _line_delay_s(
 
     speed_units_s = max(state.speed_cm_s, 1.0) * 10.0 * HPGL_UNITS_PER_MM
     move_delay_s = distance_units / speed_units_s
-    return max(minimum_delay_s, move_delay_s)
+    if move_delay_s <= 0:
+        return 0.0
+    state.queued_motion_s += move_delay_s
+    delay_s = max(0.0, state.queued_motion_s - MOTION_LOOKAHEAD_S)
+    return _consume_queued_motion(state, delay_s)
+
+
+def _consume_queued_motion(state: _HpglPacingState, delay_s: float) -> float:
+    state.queued_motion_s = max(0.0, state.queued_motion_s - delay_s)
+    return delay_s
 
 
 def probe_cutter(

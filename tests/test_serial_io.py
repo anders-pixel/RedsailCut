@@ -103,24 +103,54 @@ def test_motion_pacing_waits_for_physical_pd_move_time():
     port = FakePort()
     aborted = threading.Event()
     # 1200 HPGL units = 30 mm. VS3 = 30 mm/s, so the move takes ~1 second.
+    # The sender keeps 250 ms of lookahead queued, so it sleeps the remainder.
     hpgl = "VS3;\nPU0,0;\nPD1200,0;\n"
 
     with patch("redsailcut.serial_io.time.sleep") as sleep:
         send_hpgl(port, hpgl, lambda d, t: None, aborted, inter_line_delay_s=0.02)
 
-    assert sleep.call_args_list == [call(0.02), call(0.02), call(1.0)]
+    assert sleep.call_args_list == [call(0.02), call(0.75)]
 
 
-def test_motion_pacing_waits_for_physical_pu_travel_too():
+def test_motion_pacing_allows_short_moves_to_build_lookahead():
     port = FakePort()
     aborted = threading.Event()
-    # 400 HPGL units = 10 mm. VS10 = 100 mm/s, so the travel takes ~0.1 s.
+    # 400 HPGL units = 10 mm. VS10 = 100 mm/s, so the travel takes ~0.1 s,
+    # which fits inside the lookahead budget and should not be starved.
     hpgl = "VS10;\nPU400,0;\n"
 
     with patch("redsailcut.serial_io.time.sleep") as sleep:
         send_hpgl(port, hpgl, lambda d, t: None, aborted, inter_line_delay_s=0.02)
 
-    assert sleep.call_args_list == [call(0.02), call(0.1)]
+    assert sleep.call_args_list == [call(0.02)]
+
+
+def test_standalone_pen_up_waits_for_lift_to_settle():
+    port = FakePort()
+    aborted = threading.Event()
+    hpgl = "PU;\nPU400,0;\n"
+
+    with patch("redsailcut.serial_io.time.sleep") as sleep:
+        send_hpgl(port, hpgl, lambda d, t: None, aborted, inter_line_delay_s=0.02)
+
+    assert sleep.call_args_list == [call(0.15)]
+
+
+def test_motion_pacing_throttles_accumulated_small_moves():
+    port = FakePort()
+    aborted = threading.Event()
+    # Four 10 mm moves at VS10 are 0.4 s of cutter work. The first 0.25 s may
+    # queue for lookahead; the rest is slept to avoid unbounded buffer growth.
+    hpgl = "VS10;\nPU0,0;\nPD400,0;\nPD800,0;\nPD1200,0;\nPD1600,0;\n"
+
+    with patch("redsailcut.serial_io.time.sleep") as sleep:
+        send_hpgl(port, hpgl, lambda d, t: None, aborted, inter_line_delay_s=0.02)
+
+    assert sleep.call_args_list == [
+        call(0.02),
+        call(pytest.approx(0.05)),
+        call(pytest.approx(0.1)),
+    ]
 
 
 def test_zero_inter_line_delay_disables_all_pacing_sleep():
@@ -134,13 +164,13 @@ def test_zero_inter_line_delay_disables_all_pacing_sleep():
     sleep.assert_not_called()
 
 
-def test_permission_error_translated_to_danish_systemindstillinger_message():
+def test_permission_error_translated_to_system_settings_message():
     with patch("redsailcut.serial_io.serial.Serial",
                side_effect=PermissionError(13, "Permission denied")):
         with pytest.raises(SerialError) as exc:
             open_cutter("/dev/cu.fake", 9600)
     msg = str(exc.value)
-    assert "Systemindstillinger" in msg
+    assert "System Settings" in msg
     assert "/dev/cu.fake" in msg
 
 
@@ -152,7 +182,7 @@ def test_serial_exception_wrapping_permission_is_also_translated():
     with patch("redsailcut.serial_io.serial.Serial", side_effect=outer):
         with pytest.raises(SerialError) as exc:
             open_cutter("/dev/cu.fake", 9600)
-    assert "Systemindstillinger" in str(exc.value)
+    assert "System Settings" in str(exc.value)
 
 
 def test_generic_serial_exception_produces_non_permission_message():
@@ -160,7 +190,7 @@ def test_generic_serial_exception_produces_non_permission_message():
                side_effect=serial.SerialException("no such device")):
         with pytest.raises(SerialError) as exc:
             open_cutter("/dev/cu.fake", 9600)
-    assert "Systemindstillinger" not in str(exc.value)
+    assert "System Settings" not in str(exc.value)
     assert "/dev/cu.fake" in str(exc.value)
 
 

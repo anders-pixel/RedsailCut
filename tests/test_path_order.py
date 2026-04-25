@@ -1,4 +1,4 @@
-from redsailcut.path_order import sort_inside_first
+from redsailcut.path_order import sort_inside_first, sort_nearest_neighbor
 
 
 def _square(x: float, y: float, size: float) -> list[tuple[float, float]]:
@@ -99,3 +99,28 @@ def test_sort_is_stable_for_equal_depth_shapes():
     c = _square(40, 0, 10)
     assert sort_inside_first([a, b, c]) == [a, b, c]
     assert sort_inside_first([c, b, a]) == [c, b, a]
+
+
+def test_nearest_neighbor_reduces_pen_up_travel_order():
+    first = [(0.0, 0.0), (10.0, 0.0)]
+    far = [(100.0, 0.0), (110.0, 0.0)]
+    near = [(12.0, 0.0), (20.0, 0.0)]
+
+    assert sort_nearest_neighbor([first, far, near]) == [first, near, far]
+
+
+def test_nearest_neighbor_can_start_near_cutter_origin():
+    top = [(100.0, 0.0), (110.0, 0.0)]
+    bottom = [(5.0, 95.0), (15.0, 95.0)]
+
+    assert sort_nearest_neighbor([top, bottom], start=(0.0, 100.0)) == [
+        bottom,
+        top,
+    ]
+
+
+def test_nearest_neighbor_preserves_path_direction():
+    first = [(0.0, 0.0), (10.0, 0.0)]
+    reversed_candidate = [(20.0, 0.0), (11.0, 0.0)]
+
+    assert sort_nearest_neighbor([first, reversed_candidate])[1] == reversed_candidate
