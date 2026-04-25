@@ -87,10 +87,10 @@ def open_cutter(
         raise SerialError(f"Could not open port {port}: {e}") from e
 
 
-DEFAULT_INTER_LINE_DELAY_S = 0.02
+DEFAULT_INTER_LINE_DELAY_S = 0.03
 HPGL_UNITS_PER_MM = 40
-MOTION_LOOKAHEAD_S = 0.25
-PEN_UP_SETTLE_DELAY_S = 0.15
+MOTION_LOOKAHEAD_S = 0.05
+PEN_UP_SETTLE_DELAY_S = 0.4
 _VS_DEFAULT_CM_S = 20
 _COORD_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
 
@@ -118,6 +118,11 @@ def send_hpgl(
     a small lookahead queue. That keeps the cutter fed through curves without
     dumping the whole job into its small serial buffer.
     """
+    if hasattr(ser, "reset_output_buffer"):
+        try:
+            ser.reset_output_buffer()
+        except Exception:
+            pass
     lines = hpgl.splitlines(keepends=True)
     total = len(lines)
     pacing = _HpglPacingState()
@@ -192,9 +197,11 @@ def _line_delay_s(
     speed_units_s = max(state.speed_cm_s, 1.0) * 10.0 * HPGL_UNITS_PER_MM
     move_delay_s = distance_units / speed_units_s
     if move_delay_s <= 0:
+        if op == "PU":
+            return max(minimum_delay_s, PEN_UP_SETTLE_DELAY_S)
         return 0.0
     state.queued_motion_s += move_delay_s
-    delay_s = max(0.0, state.queued_motion_s - MOTION_LOOKAHEAD_S)
+    delay_s = max(minimum_delay_s, state.queued_motion_s - MOTION_LOOKAHEAD_S)
     return _consume_queued_motion(state, delay_s)
 
 

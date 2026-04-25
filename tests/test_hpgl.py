@@ -22,7 +22,6 @@ def test_empty_polylines_emits_header_and_footer_only():
         "FS80;",
         "PA;",
         "PU0,0;",
-        "PU;",
         "SP0;",
     ]
 
@@ -63,7 +62,7 @@ def test_horizontal_line_scales_to_40_units_per_mm():
     top_y = 50 * UNITS_PER_MM  # 2000
     assert f"PU0,{top_y};" in out
     assert f"PD400,{top_y};" in out
-    assert "PU;" in out
+    assert "PU;" not in out
 
 
 def test_y_flip_places_svg_origin_at_top():
@@ -102,11 +101,10 @@ def test_multiple_polylines_each_get_pen_up_travel_to_next_start():
     ]
     out = split(polylines_to_hpgl(polys, height_mm=50.0))
     # Each polyline starts with a PU<x>,<y>; travel to its first point.
-    # Header PU0,0; + 3 polyline travels = 4 coordinate pen-up moves.
+    # Header PU0,0; + per-polyline lift/travel pairs + final lift.
     pu_with_coords = [ln for ln in out if ln.startswith("PU") and "," in ln]
-    assert len(pu_with_coords) == 4
-    # Standalone PU; gives the tool time to lift before coordinate travel.
-    assert out.count("PU;") == 4
+    assert len(pu_with_coords) == 8
+    assert "PU;" not in out
 
 
 def test_pd_coordinates_are_sent_one_per_command_for_redsail_compatibility():
@@ -130,7 +128,8 @@ def test_single_point_polyline_is_skipped():
 
 def test_footer_lifts_and_deselects_pen_without_return_travel():
     out = split(polylines_to_hpgl([[(0.0, 0.0), (1.0, 0.0)]], height_mm=10.0))
-    assert out[-2:] == ["PU;", "SP0;"]
+    assert out[-2:] == ["PU40,400;", "SP0;"]
+    assert "PU0,0;" not in out[-2:]
 
 
 def test_invalid_height_raises():

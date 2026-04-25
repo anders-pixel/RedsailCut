@@ -45,7 +45,6 @@ from redsailcut.hpgl import (
 )
 from redsailcut.path_order import (
     sort_inside_first as sort_polylines_inside_first,
-    sort_nearest_neighbor as sort_polylines_nearest_neighbor,
 )
 from redsailcut.preview import PreviewWidget
 from redsailcut.rotate import rotate_polylines
@@ -692,10 +691,6 @@ class MainWindow(QMainWindow):
             )
         if self._chk_sort.isChecked():
             polylines = sort_polylines_inside_first(polylines)
-        else:
-            polylines = sort_polylines_nearest_neighbor(
-                polylines, start=(0.0, cut_height_mm)
-            )
         if (self._chk_lift.isChecked() and self._spin_offset.value() > 0):
             polylines = add_sharp_corner_pivots(
                 polylines, threshold_deg=self._spin_sharp.value()
@@ -772,10 +767,6 @@ class MainWindow(QMainWindow):
                 )
             if self._chk_sort.isChecked():
                 polylines = sort_polylines_inside_first(polylines)
-            else:
-                polylines = sort_polylines_nearest_neighbor(
-                    polylines, start=(0.0, h_mm)
-                )
             if (self._chk_lift.isChecked() and self._spin_offset.value() > 0):
                 polylines = add_sharp_corner_pivots(
                     polylines, threshold_deg=self._spin_sharp.value()

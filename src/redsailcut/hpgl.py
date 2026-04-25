@@ -67,13 +67,16 @@ def polylines_to_hpgl(
     # bytes fine but never moves the head. Plain `FS{n};` works on the RS720C
     # and every other plotter we'd realistically ship to.
 
+    current_units = (0, 0)
+    cut_anything = False
     for polyline in normalised_polylines:
         pts = list(polyline)
         if len(pts) < 2:
             continue
         x0, y0 = to_units(*pts[0])
-        lines.append("PU;")
+        lines.append(f"PU{current_units[0]},{current_units[1]};")
         lines.append(f"PU{x0},{y0};")
+        current_units = (x0, y0)
         pd_coords: list[str] = []
         for idx, (x_mm, y_mm) in enumerate(pts[1:], start=1):
             xu, yu = to_units(x_mm, y_mm)
@@ -81,10 +84,15 @@ def polylines_to_hpgl(
             if len(pd_coords) == MAX_PD_COORD_PAIRS or idx == len(pts) - 1:
                 lines.append("PD" + ",".join(pd_coords) + ";")
                 pd_coords = []
-        # Explicit `PU;` before the next coordinate move gives the physical
-        # solenoid/blade time to lift before a long pen-up travel starts.
+            current_units = (xu, yu)
+        cut_anything = True
+        # The next path starts with a duplicate coordinate-bearing `PUx,y;`.
+        # This lifts the tool and gives the sender a safe settle point without
+        # relying on standalone `PU;`, which some Redsail firmwares mis-parse
+        # in long streams.
 
-    lines.append("PU;")
+    if cut_anything:
+        lines.append(f"PU{current_units[0]},{current_units[1]};")
     lines.append("SP0;")
     return "\n".join(lines) + "\n"
 
