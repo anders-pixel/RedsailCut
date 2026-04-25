@@ -83,6 +83,15 @@ class AppSettings:
     def lock_ratio(self, v: bool) -> None:
         self._s.setValue("lock_ratio", bool(v))
 
+    @property
+    def rotation_deg(self) -> int:
+        v = int(self._s.value("rotation_deg", 0, type=int))
+        return v if v in (0, 90, 180, 270) else 0
+
+    @rotation_deg.setter
+    def rotation_deg(self, v: int) -> None:
+        self._s.setValue("rotation_deg", int(v))
+
     # Blade compensation (pen-mode defaults — users opt in)
     @property
     def blade_offset_mm(self) -> float:

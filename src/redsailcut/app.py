@@ -40,6 +40,7 @@ from redsailcut.blade_offset import compensate_polylines
 from redsailcut.hpgl import polylines_to_hpgl
 from redsailcut.path_order import sort_inside_first as sort_polylines_inside_first
 from redsailcut.preview import PreviewWidget
+from redsailcut.rotate import rotate_polylines
 from redsailcut.sharp_corners import add_pivots as add_sharp_corner_pivots
 from redsailcut.serial_io import (
     FlowControl,
@@ -204,9 +205,23 @@ class MainWindow(QMainWindow):
         self._chk_lock = QCheckBox("Lock aspect ratio")
         self._chk_lock.setChecked(True)
         self._chk_lock.toggled.connect(lambda v: setattr(self._settings, "lock_ratio", v))
+        self._cmb_rotation = QComboBox()
+        for deg, label in [
+            (0, "0°"),
+            (90, "90° CW"),
+            (180, "180°"),
+            (270, "270° CW"),
+        ]:
+            self._cmb_rotation.addItem(label, deg)
+        self._cmb_rotation.setToolTip(
+            "Rotér motivet 90° ad gangen. Brug det til at få SVG'en til at "
+            "matche cutterens fysiske origin (typisk nederst-til-højre på rullen)."
+        )
+        self._cmb_rotation.currentIndexChanged.connect(self._on_rotation_changed)
         sf.addRow("Width:", self._spin_width)
         sf.addRow("Height:", self._spin_height)
         sf.addRow(self._chk_lock)
+        sf.addRow("Rotation:", self._cmb_rotation)
         c_layout.addWidget(size_box)
 
         # Cutter group
@@ -353,6 +368,9 @@ class MainWindow(QMainWindow):
         self._chk_sort.setChecked(self._settings.sort_inside_first)
         self._chk_lift.setChecked(self._settings.lift_sharp_corners)
         self._spin_sharp.setValue(self._settings.sharp_corner_threshold_deg)
+        idx = self._cmb_rotation.findData(self._settings.rotation_deg)
+        if idx >= 0:
+            self._cmb_rotation.setCurrentIndex(idx)
         self._update_overcut_enabled()
         self._update_sharp_enabled()
         baud = self._settings.baud
@@ -400,6 +418,29 @@ class MainWindow(QMainWindow):
     def _on_sort_inside_first_changed(self, v: bool) -> None:
         self._settings.sort_inside_first = v
         self._refresh_estimate()
+
+    def _on_rotation_changed(self, _idx: int) -> None:
+        deg = self._cmb_rotation.currentData()
+        if deg is None:
+            return
+        self._settings.rotation_deg = int(deg)
+        self._reload_preview_with_current_size()
+        self._refresh_estimate()
+
+    def _reload_preview_with_current_size(self) -> None:
+        if self._svg_path is None:
+            return
+        # Pass the post-rotation dimensions and rotation angle to the preview
+        # so the visual orientation matches what we'll send to the cutter.
+        rot = int(self._cmb_rotation.currentData() or 0)
+        w_in = self._spin_width.value()
+        h_in = self._spin_height.value()
+        if rot in (90, 270):
+            display_w, display_h = h_in, w_in
+        else:
+            display_w, display_h = w_in, h_in
+        self._preview.load_svg(str(self._svg_path), display_w, display_h,
+                               rotation_deg=rot)
 
     def _on_lift_sharp_changed(self, v: bool) -> None:
         self._settings.lift_sharp_corners = v
@@ -529,7 +570,12 @@ class MainWindow(QMainWindow):
         self._spin_width.blockSignals(False)
         self._spin_height.blockSignals(False)
 
-        self._preview.load_svg(str(path), natural_width_mm, natural_height_mm)
+        rot = int(self._cmb_rotation.currentData() or 0)
+        if rot in (90, 270):
+            disp_w, disp_h = natural_height_mm, natural_width_mm
+        else:
+            disp_w, disp_h = natural_width_mm, natural_height_mm
+        self._preview.load_svg(str(path), disp_w, disp_h, rotation_deg=rot)
         self._refresh_estimate()
         self._update_cut_button_state()
 
@@ -570,6 +616,11 @@ class MainWindow(QMainWindow):
             self._lbl_warn.setVisible(False)
             return
         # Run the same pipeline as the real cut so the estimate is faithful.
+        rotation_deg = int(self._cmb_rotation.currentData() or 0)
+        if rotation_deg:
+            polylines, _, _ = rotate_polylines(
+                polylines, rotation_deg, width_mm, self._spin_height.value()
+            )
         if self._chk_sort.isChecked():
             polylines = sort_polylines_inside_first(polylines)
         if (self._chk_lift.isChecked() and self._spin_offset.value() > 0):
@@ -636,6 +687,11 @@ class MainWindow(QMainWindow):
         try:
             polylines, w_mm, h_mm = svg_to_polylines(
                 self._svg_path, target_width_mm=width_mm)
+            rotation_deg = int(self._cmb_rotation.currentData() or 0)
+            if rotation_deg:
+                polylines, w_mm, h_mm = rotate_polylines(
+                    polylines, rotation_deg, w_mm, h_mm
+                )
             if self._chk_sort.isChecked():
                 polylines = sort_polylines_inside_first(polylines)
             if (self._chk_lift.isChecked() and self._spin_offset.value() > 0):
