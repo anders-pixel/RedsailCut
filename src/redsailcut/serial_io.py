@@ -87,10 +87,11 @@ def open_cutter(
         raise SerialError(f"Could not open port {port}: {e}") from e
 
 
-DEFAULT_INTER_LINE_DELAY_S = 0.03
+DEFAULT_INTER_LINE_DELAY_S = 0.015
 HPGL_UNITS_PER_MM = 40
-MOTION_LOOKAHEAD_S = 0.05
-PEN_UP_SETTLE_DELAY_S = 0.4
+MOTION_LOOKAHEAD_S = 0.15
+PEN_UP_SETTLE_DELAY_S = 0.12
+PEN_UP_TRAVEL_SPEED_FACTOR = 1.7
 _VS_DEFAULT_CM_S = 20
 _COORD_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
 
@@ -102,6 +103,7 @@ class _HpglPacingState:
     absolute: bool = True
     speed_cm_s: float = _VS_DEFAULT_CM_S
     queued_motion_s: float = 0.0
+    pen_down: bool = False
 
 
 def send_hpgl(
@@ -179,9 +181,11 @@ def _line_delay_s(
     if op not in {"PU", "PD"}:
         return _consume_queued_motion(state, minimum_delay_s)
 
+    was_pen_down = state.pen_down
     numbers = [float(m.group(0)) for m in _COORD_RE.finditer(args)]
+    state.pen_down = op == "PD"
     if len(numbers) < 2:
-        if op == "PU":
+        if op == "PU" and was_pen_down:
             return max(minimum_delay_s, PEN_UP_SETTLE_DELAY_S)
         return 0.0
 
@@ -195,13 +199,18 @@ def _line_delay_s(
         state.x, state.y = target_x, target_y
 
     speed_units_s = max(state.speed_cm_s, 1.0) * 10.0 * HPGL_UNITS_PER_MM
+    if op == "PU":
+        speed_units_s *= PEN_UP_TRAVEL_SPEED_FACTOR
     move_delay_s = distance_units / speed_units_s
+    lift_delay_s = PEN_UP_SETTLE_DELAY_S if op == "PU" and was_pen_down else 0.0
     if move_delay_s <= 0:
-        if op == "PU":
-            return max(minimum_delay_s, PEN_UP_SETTLE_DELAY_S)
-        return 0.0
+        return max(minimum_delay_s, lift_delay_s) if lift_delay_s > 0 else 0.0
     state.queued_motion_s += move_delay_s
-    delay_s = max(minimum_delay_s, state.queued_motion_s - MOTION_LOOKAHEAD_S)
+    delay_s = max(
+        minimum_delay_s,
+        lift_delay_s,
+        state.queued_motion_s - MOTION_LOOKAHEAD_S,
+    )
     return _consume_queued_motion(state, delay_s)
 
 

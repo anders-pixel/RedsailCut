@@ -103,26 +103,26 @@ def test_motion_pacing_waits_for_physical_pd_move_time():
     port = FakePort()
     aborted = threading.Event()
     # 1200 HPGL units = 30 mm. VS3 = 30 mm/s, so the move takes ~1 second.
-    # The sender keeps 50 ms of lookahead queued, so it sleeps the remainder.
+    # The sender keeps 150 ms of lookahead queued, so it sleeps the remainder.
     hpgl = "VS3;\nPU0,0;\nPD1200,0;\n"
 
     with patch("redsailcut.serial_io.time.sleep") as sleep:
         send_hpgl(port, hpgl, lambda d, t: None, aborted, inter_line_delay_s=0.02)
 
-    assert sleep.call_args_list == [call(0.02), call(0.4), call(0.95)]
+    assert sleep.call_args_list == [call(0.02), call(0.85)]
 
 
 def test_motion_pacing_allows_short_moves_to_build_lookahead():
     port = FakePort()
     aborted = threading.Event()
     # 400 HPGL units = 10 mm. VS10 = 100 mm/s, so the travel takes ~0.1 s,
-    # which exceeds the small 50 ms safe lookahead and is partly slept.
+    # which fits inside the 150 ms safe lookahead and only gets the minimum delay.
     hpgl = "VS10;\nPU400,0;\n"
 
     with patch("redsailcut.serial_io.time.sleep") as sleep:
         send_hpgl(port, hpgl, lambda d, t: None, aborted, inter_line_delay_s=0.02)
 
-    assert sleep.call_args_list == [call(0.02), call(0.05)]
+    assert sleep.call_args_list == [call(0.02), call(0.02)]
 
 
 def test_standalone_pen_up_waits_for_lift_to_settle():
@@ -133,13 +133,27 @@ def test_standalone_pen_up_waits_for_lift_to_settle():
     with patch("redsailcut.serial_io.time.sleep") as sleep:
         send_hpgl(port, hpgl, lambda d, t: None, aborted, inter_line_delay_s=0.02)
 
-    assert sleep.call_args_list == [call(0.4), call(0.02)]
+    assert sleep.call_args_list == [call(0.02)]
+
+
+def test_pen_up_travel_uses_faster_travel_factor_than_cutting():
+    port = FakePort()
+    aborted = threading.Event()
+    # 4000 HPGL units = 100 mm. VS10 = 100 mm/s cutting speed, but pen-up
+    # travel is paced 1.7x faster and keeps 150 ms lookahead:
+    # (1.0 / 1.7) - 0.15 ~= 0.438 s.
+    hpgl = "VS10;\nPU4000,0;\n"
+
+    with patch("redsailcut.serial_io.time.sleep") as sleep:
+        send_hpgl(port, hpgl, lambda d, t: None, aborted, inter_line_delay_s=0.02)
+
+    assert sleep.call_args_list == [call(0.02), call(pytest.approx(0.438, abs=0.001))]
 
 
 def test_motion_pacing_throttles_accumulated_small_moves():
     port = FakePort()
     aborted = threading.Event()
-    # Four 10 mm moves at VS10 are 0.4 s of cutter work. Only 50 ms may queue
+    # Four 10 mm moves at VS10 are 0.4 s of cutter work. Only 150 ms may queue
     # for lookahead; the rest is slept to avoid buffer/parser desync.
     hpgl = "VS10;\nPU0,0;\nPD400,0;\nPD800,0;\nPD1200,0;\nPD1600,0;\n"
 
@@ -148,9 +162,8 @@ def test_motion_pacing_throttles_accumulated_small_moves():
 
     assert sleep.call_args_list == [
         call(0.02),
-        call(0.4),
-        call(pytest.approx(0.05)),
-        call(pytest.approx(0.1)),
+        call(0.02),
+        call(pytest.approx(0.03)),
         call(pytest.approx(0.1)),
         call(pytest.approx(0.1)),
     ]

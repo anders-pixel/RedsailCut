@@ -102,6 +102,20 @@ python -m redsailcut file.svg --width 400 \        # headless CLI
   the sharp-corner threshold (default 30°) so the knife can rotate
   on pen-up before continuing.
 
+### Speed for large jobs
+
+Hardware-verified on a Redsail RS720C: **3 cm/s is the safe speed for
+designs bigger than ~100 polylines**, e.g. anything with rich
+ornamental text or many small letters. Higher speeds may work on
+shorter jobs but on a long stream of small segments the cutter's
+input buffer and stepper response can drift, producing random long
+lines mid-cut. If you're cutting at 580 mm width or near the cutter's
+mechanical limits, drop to 3 cm/s and accept the longer wall-clock
+time — the alternative is wasted vinyl.
+
+Smaller jobs (single-letter test cuts, simple shapes) work fine at
+the default 20 cm/s.
+
 ## Known limits
 
 - No design tools. Design in Illustrator / Inkscape / Affinity first,

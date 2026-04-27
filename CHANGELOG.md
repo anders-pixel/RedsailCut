@@ -30,6 +30,20 @@ adheres to [Semantic Versioning](https://semver.org/).
   pen-up move at the end of large jobs.
 - Curve flattening and cleanup reduce micro-segments that can make the cutter
   vibrate on circles and ornamental curves.
+- Nearest-neighbor path ordering removed from the cut pipeline — it was
+  jumping between letters mid-script (e.g. from "l" to "a" inside "Olivia")
+  instead of finishing each glyph in order.
+- Serial pacing is more conservative across all PU/PD commands, with a
+  realistic pen-up travel speed factor (1.7×) and a brief settle delay only
+  on the down→up transition.
+
+### Hardware-verified
+
+- A full **Rejse til Barcelona** cut at 404 × 580 mm completed cleanly on a
+  Redsail RS720C using **3 cm/s** with the new pacing. Higher speeds may
+  work on smaller jobs but 3 cm/s is the recommended default for designs
+  with many small segments (ornamental text, fine illustrations) — see
+  README "Speed for large jobs".
 
 ### Fixed
 
