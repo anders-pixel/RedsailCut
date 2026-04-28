@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "redsailcut"
-version = "0.1.0"
+version = "0.2.0"
 description = "Minimal SVG cutting app for Redsail vinyl plotters"
 requires-python = ">=3.11"
 authors = [{ name = "Anders Lorentzen", email = "anders@loow.com" }]
@@ -35,8 +35,8 @@ pythonpath = ["src"]
 [tool.briefcase]
 project_name = "RedsailCut"
 bundle = "dk.loow"
-version = "0.1.0"
-url = "https://github.com/loow/redsailcut"
+version = "0.2.0"
+url = "https://github.com/anders-pixel/RedsailCut"
 license.file = "LICENSE"
 author = "Anders Lorentzen"
 author_email = "anders@loow.com"

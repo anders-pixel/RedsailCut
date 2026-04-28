@@ -4,10 +4,15 @@ All notable changes to RedsailCut will be recorded here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] — 2026-04-28
+
+Hardware-verified release: a full **Rejse til Barcelona** cut at 404 × 580 mm
+completed cleanly on a Redsail RS720C using the new pacing at 3 cm/s.
 
 ### Added
 
+- 90° rotation control in the Size group so the design can be aligned with
+  the cutter's physical origin without re-exporting the SVG.
 - Import cleanup presets for noisy/traced SVGs, including optional curve
   smoothing.
 - Optimized-polyline preview so the GUI displays the geometry that will be sent
@@ -122,4 +127,5 @@ actually cut and is included verbatim in the commit history:
    at VS3 a single long move takes seconds; flat pacing overfills the
    buffer.
 
+[0.2.0]: https://github.com/anders-pixel/RedsailCut/releases/tag/v0.2.0
 [0.1.0]: https://github.com/anders-pixel/RedsailCut/releases/tag/v0.1.0
